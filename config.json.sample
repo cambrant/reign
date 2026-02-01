@@ -1,0 +1,10 @@
+{
+  "listenAddr": "127.0.0.1:7890",
+  "databasePath": "/var/lib/reign/reign.db",
+  "logLevel": "info",
+  "startupTimeout": "5m",
+  "healthCheckInterval": "30s",
+  "restartDelay": "30s",
+  "maxRestarts": 5,
+  "shutdownTimeout": "30s"
+}

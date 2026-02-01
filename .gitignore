@@ -1,0 +1,26 @@
+# Reign ignore patterns
+
+# Binary
+reign
+
+# Database
+*.db
+*.db-journal
+data/
+
+# Coverage
+coverage.out
+coverage.html
+
+# Config (use config.json.sample as template)
+config.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
