@@ -12,7 +12,7 @@ build:
 	go build $(LDFLAGS) -o $(BINARY_NAME) .
 
 build-linux:
-	CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_NAME) .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BINARY_NAME) .
 
 test:
 	go test ./...

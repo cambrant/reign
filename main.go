@@ -80,8 +80,8 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start services
-	if err := orch.StartupServices(ctx); err != nil {
+	// Start services (sync first if keepRunning is enabled)
+	if err := orch.StartupServices(ctx, cfg.KeepRunning); err != nil {
 		logger.Error("Error during startup: %v", err)
 	}
 
@@ -115,7 +115,7 @@ func main() {
 	}
 
 	// Shutdown services
-	if err := orch.ShutdownServices(shutdownCtx); err != nil {
+	if err := orch.ShutdownServices(shutdownCtx, cfg.KeepRunning); err != nil {
 		logger.Error("Error during service shutdown: %v", err)
 	}
 

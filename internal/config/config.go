@@ -23,6 +23,7 @@ type Config struct {
 	MaxRestarts         int           `json:"maxRestarts"`
 	ShutdownTimeout     time.Duration `json:"-"`
 	ShutdownTimeoutStr  string        `json:"shutdownTimeout"`
+	KeepRunning         bool          `json:"keepRunning"`
 }
 
 // DefaultConfig returns a configuration with sensible defaults.
@@ -40,6 +41,7 @@ func DefaultConfig() *Config {
 		MaxRestarts:         5,
 		ShutdownTimeout:     30 * time.Second,
 		ShutdownTimeoutStr:  "30s",
+		KeepRunning:         true,
 	}
 }
 

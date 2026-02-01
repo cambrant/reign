@@ -42,7 +42,14 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 }
 
 // StartupServices starts all enabled services in the correct order.
-func (o *Orchestrator) StartupServices(ctx context.Context) error {
+// If syncFirst is true, it first probes actual service states and only starts services that aren't running.
+func (o *Orchestrator) StartupServices(ctx context.Context, syncFirst bool) error {
+	if syncFirst {
+		if err := o.SyncServiceStates(ctx); err != nil {
+			logger.Warn("Failed to sync service states: %v", err)
+		}
+	}
+
 	logger.Info("Starting enabled services...")
 
 	services, err := models.ListEnabledServicesForStartup(o.db)
@@ -55,10 +62,19 @@ func (o *Orchestrator) StartupServices(ctx context.Context) error {
 		return nil
 	}
 
+	started := 0
+
 	// Start infrastructure services first
 	for _, service := range services {
 		if !service.Infrastructure {
 			break // Infrastructure services are first in the list
+		}
+
+		// Check if already running (from sync)
+		state, _ := models.GetServiceState(o.db, service.ID)
+		if state != nil && state.Status == models.StatusRunning {
+			logger.Debug("Infrastructure service %s already running, skipping", service.ID)
+			continue
 		}
 
 		logger.Info("Starting infrastructure service: %s", service.ID)
@@ -67,6 +83,7 @@ func (o *Orchestrator) StartupServices(ctx context.Context) error {
 			// Continue with other infrastructure services
 			continue
 		}
+		started++
 
 		// Wait for infrastructure service to be healthy
 		if err := o.waitForHealthy(ctx, &service); err != nil {
@@ -80,23 +97,38 @@ func (o *Orchestrator) StartupServices(ctx context.Context) error {
 			continue // Skip infrastructure services (already started)
 		}
 
+		// Check if already running (from sync)
+		state, _ := models.GetServiceState(o.db, service.ID)
+		if state != nil && state.Status == models.StatusRunning {
+			logger.Debug("Service %s already running, skipping", service.ID)
+			continue
+		}
+
 		logger.Info("Starting service: %s", service.ID)
 		if err := o.StartService(ctx, service.ID); err != nil {
 			logger.Error("Failed to start service %s: %v", service.ID, err)
 			continue
 		}
+		started++
 	}
 
-	logger.Info("Startup complete. Started %d services.", len(services))
+	logger.Info("Startup complete. Started %d services (%d already running).", started, len(services)-started)
 	return nil
 }
 
-// ShutdownServices stops all running services.
-func (o *Orchestrator) ShutdownServices(ctx context.Context) error {
-	logger.Info("Shutting down services...")
+// ShutdownServices stops all running services (unless keepRunning is enabled).
+func (o *Orchestrator) ShutdownServices(ctx context.Context, keepRunning bool) error {
+	logger.Info("Shutting down orchestrator...")
 
 	// Signal background goroutines to stop
 	close(o.stopChan)
+
+	if keepRunning {
+		logger.Info("keepRunning enabled - leaving services running")
+		o.wg.Wait()
+		logger.Info("Shutdown complete (services still running)")
+		return nil
+	}
 
 	services, err := models.ListServices(o.db)
 	if err != nil {
@@ -124,6 +156,67 @@ func (o *Orchestrator) ShutdownServices(ctx context.Context) error {
 	o.wg.Wait()
 
 	logger.Info("Shutdown complete")
+	return nil
+}
+
+// SyncServiceStates probes the actual state of all services and updates the database.
+// This is used on startup when keepRunning is enabled to discover services that are still running.
+func (o *Orchestrator) SyncServiceStates(ctx context.Context) error {
+	logger.Info("Syncing service states with actual running state...")
+
+	services, err := models.ListServices(o.db)
+	if err != nil {
+		return fmt.Errorf("failed to list services: %w", err)
+	}
+
+	synced := 0
+	for _, service := range services {
+		exec := o.getExecutor(service.Type)
+		if exec == nil {
+			logger.Warn("Unknown service type for %s: %s", service.ID, service.Type)
+			continue
+		}
+
+		// Probe actual status from executor
+		actualStatus, err := exec.Status(ctx, &service)
+		if err != nil {
+			logger.Warn("Failed to get status for %s: %v", service.ID, err)
+			continue
+		}
+
+		// Get current database state
+		state, err := models.GetServiceState(o.db, service.ID)
+		if err != nil {
+			logger.Warn("Failed to get state for %s: %v", service.ID, err)
+			continue
+		}
+
+		// Skip disabled services
+		if state != nil && state.Status == models.StatusDisabled {
+			continue
+		}
+
+		// Update database to match actual state
+		if actualStatus == models.StatusRunning {
+			if state == nil || state.Status != models.StatusRunning {
+				logger.Info("Service %s is running (synced)", service.ID)
+				if err := models.SetServiceStarted(o.db, service.ID, nil); err != nil {
+					logger.Error("Failed to update state for %s: %v", service.ID, err)
+				}
+				synced++
+			}
+		} else if actualStatus == models.StatusStopped {
+			if state != nil && state.Status == models.StatusRunning {
+				logger.Info("Service %s is stopped (synced)", service.ID)
+				if err := models.SetServiceStopped(o.db, service.ID); err != nil {
+					logger.Error("Failed to update state for %s: %v", service.ID, err)
+				}
+				synced++
+			}
+		}
+	}
+
+	logger.Info("Synced %d service states", synced)
 	return nil
 }
 
