@@ -117,26 +117,6 @@ Initial release with core functionality:
 
 ## Future Considerations
 
-### Multi-node Support
-
-Currently, Reign is designed for single-machine deployments. Future versions could support:
-
-- Agent mode for remote nodes
-- Centralized control plane
-- Service migration between nodes
-- Load balancing across nodes
-
-This would require significant architectural changes and is not planned for near-term releases.
-
-### Docker Swarm / Kubernetes
-
-Reign intentionally targets simple Docker Compose deployments. For more complex orchestration needs, consider:
-
-- Docker Swarm for multi-node Docker
-- Kubernetes for large-scale container orchestration
-
-Reign may add optional integration with these platforms but will remain focused on simplicity.
-
 ### Configuration Management
 
 Potential features for managing service configurations:
