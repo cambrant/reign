@@ -6,38 +6,33 @@ A lightweight Docker Compose orchestrator for single-machine deployments.
 
 ## Overview
 
-Reign manages Docker Compose projects and native binaries on a single Linux server. It replaces manual systemd service files with a unified REST API and persistent state management.
+Reign manages Docker Compose projects and native binaries on a single Linux server. It replaces manual systemd service files with a unified CLI, REST API, and persistent state management.
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                       systemd                             │
-│                   (runs reign only)                       │
-└──────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌──────────────────────────────────────────────────────────┐
-│                        Reign                              │
-│                                                          │
-│   REST API ◄──► Orchestrator ◄──► Docker Compose        │
-│       │              │                                   │
-│       └──────► SQLite Database                           │
-└──────────────────────────────────────────────────────────┘
-                          │
-            ┌─────────────┼─────────────┐
-            ▼             ▼             ▼
-      ┌─────────┐   ┌─────────┐   ┌─────────┐
-      │ Service │   │ Service │   │ Service │
-      │   #1    │   │   #2    │   │   #3    │
-      └─────────┘   └─────────┘   └─────────┘
+  reign <cmd>          ┌──────────────────────────────────────────┐
+  (CLI client) ──────► │              Reign Server                │
+                       │                                          │
+  curl / HTTP ───────► │  REST API ◄──► Orchestrator ◄──► Docker  │
+                       │      │              │            Compose  │
+  systemd ───────────► │      └──────► SQLite Database             │
+  (runs reign serve)   └──────────────────────────────────────────┘
+                                             │
+                               ┌─────────────┼─────────────┐
+                               ▼             ▼             ▼
+                         ┌─────────┐   ┌─────────┐   ┌─────────┐
+                         │ Service │   │ Service │   │ Service │
+                         │   #1    │   │   #2    │   │   #3    │
+                         └─────────┘   └─────────┘   └─────────┘
 ```
 
 ## Features
 
+- **CLI** - Manage services from the command line
+- **REST API** - Full control via HTTP endpoints
 - **Docker Compose Management** - Start, stop, restart compose projects
 - **Native Binary Support** - Run standalone binaries with journald logging
 - **Infrastructure Priority** - Start databases and dependencies first
 - **Automatic Image Pulls** - Always pull latest images before starting
-- **REST API** - Full control via HTTP endpoints
 - **Persistent State** - SQLite database tracks all services
 - **Event Logging** - Audit trail of all service operations
 - **Health Monitoring** - Report container status and statistics
@@ -77,6 +72,14 @@ sudo cp reign.service /etc/systemd/system/
 sudo systemctl enable --now reign
 ```
 
+Once the server is running, use the CLI from the same binary:
+
+```bash
+reign list
+reign show myservice
+reign start myservice
+```
+
 ---
 
 ## Configuration
@@ -96,6 +99,132 @@ Configuration file (`config.json`):
 | `listenAddr` | `127.0.0.1:7890` | HTTP API listen address |
 | `databasePath` | `/var/lib/reign/reign.db` | SQLite database location |
 | `logLevel` | `info` | Log level: debug, info, warn, error |
+
+---
+
+## CLI Reference
+
+The `reign` binary acts as both the server and the CLI client. When invoked with a subcommand it talks to the running server over HTTP.
+
+### Global Options
+
+| Option | Env Var | Default | Description |
+|--------|---------|---------|-------------|
+| `--server` | `REIGN_SERVER` | `http://127.0.0.1:7890` | Server address |
+
+### Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `list` | `ls`, `status`, `ps` | List all services with status |
+| `show` | `get` | Show detailed service information |
+| `create` | `add` | Create a new service |
+| `update` | `set` | Update a service |
+| `delete` | `rm`, `remove` | Delete a service |
+| `start` | | Start a service |
+| `stop` | | Stop a service |
+| `restart` | | Restart a service |
+| `logs` | | View service logs |
+| `enable` | | Enable a service |
+| `disable` | | Disable a service |
+| `serve` | | Start the server (default) |
+| `help` | | Show help for a command |
+| `version` | | Show version |
+
+### Listing Services
+
+```bash
+reign list              # table output
+reign list --json       # JSON output
+```
+
+### Showing a Service
+
+```bash
+reign show myservice              # human-readable details + events
+reign show --json myservice       # JSON service definition only
+```
+
+The `--json` flag outputs the service definition in a format that can be piped
+directly into `create` or `update`.
+
+### Creating a Service
+
+Using flags:
+
+```bash
+reign create \
+  --id myapp \
+  --name "My Application" \
+  --type compose \
+  --path /home/tim/myapp
+```
+
+Using a JSON file:
+
+```bash
+reign create -f service.json
+```
+
+From stdin (e.g. clone an existing service):
+
+```bash
+reign show --json oldservice | jq '.id = "newservice"' | reign create -f -
+```
+
+| Flag | Description |
+|------|-------------|
+| `-f`, `--file` | JSON file with service definition (`-` for stdin) |
+| `--id` | Service ID (required) |
+| `--name` | Display name (required) |
+| `--type` | `compose` or `binary` (required) |
+| `--path` | Path to compose dir or binary (required) |
+| `--command` | Command / arguments for binary services |
+| `--enabled` | `true` / `false` (default: `true`) |
+| `--infrastructure` | `true` / `false` (default: `false`) |
+
+Flags override any values loaded from a JSON file.
+
+### Updating a Service
+
+```bash
+reign update myservice --name "New Name"
+reign update myservice --enabled false
+reign update myservice -f updated.json
+reign show --json myservice | jq '.name = "New Name"' | reign update myservice -f -
+```
+
+Accepts the same field flags as `create` (except `--id`). Only provided fields
+are changed.
+
+### Deleting a Service
+
+```bash
+reign delete myservice        # prompts for confirmation
+reign delete -f myservice     # no confirmation
+```
+
+### Start / Stop / Restart
+
+```bash
+reign start myservice
+reign stop myservice
+reign restart myservice
+```
+
+### Enable / Disable
+
+```bash
+reign disable myservice       # prevents starting
+reign enable myservice        # allows starting again
+```
+
+### Logs
+
+```bash
+reign logs myservice          # last 100 lines
+reign logs -n 50 myservice    # last 50 lines
+```
 
 ---
 
@@ -224,6 +353,40 @@ Example: PostgreSQL and Redis as infrastructure, web apps as regular services.
 ---
 
 ## Example Workflow
+
+Using the CLI:
+
+```bash
+# Register a database (infrastructure)
+reign create \
+  --id postgres \
+  --name "PostgreSQL" \
+  --type compose \
+  --path /home/tim/postgres \
+  --infrastructure true
+
+# Register an application
+reign create \
+  --id myapp \
+  --name "My Application" \
+  --type compose \
+  --path /home/tim/myapp
+
+# Start services
+reign start postgres
+reign start myapp
+
+# Check status
+reign list
+
+# View details
+reign show myapp
+
+# Export, tweak, and clone a service
+reign show --json myapp | jq '.id = "myapp-staging" | .name = "My App (staging)"' | reign create -f -
+```
+
+The same operations via curl:
 
 ```bash
 # Register a database (infrastructure)

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/reign/internal/cli"
 	"github.com/reign/internal/config"
 	"github.com/reign/internal/handlers"
 	"github.com/reign/internal/logger"
@@ -18,7 +19,17 @@ import (
 )
 
 func main() {
-	// Parse command-line flags
+	// Check for CLI commands first
+	handled, err := cli.Run(os.Args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	if handled {
+		os.Exit(0)
+	}
+
+	// Parse command-line flags for server mode
 	configPath, showVersion := config.ParseFlags()
 
 	if showVersion {
