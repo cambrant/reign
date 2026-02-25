@@ -77,8 +77,53 @@ func main() {
 	// Set version for health handler
 	handlers.SetVersion(version.Short())
 
+	// Events handler
+	eventsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			w.Write([]byte(`{"error":"method not allowed"}`))
+			return
+		}
+
+		follow := r.URL.Query().Get("follow") == "true"
+
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if n, err := fmt.Sscanf(l, "%d", &limit); err != nil || n != 1 || limit <= 0 {
+				limit = 50
+			}
+		}
+
+		if follow {
+			streamEvents(w, r, db, limit)
+			return
+		}
+
+		events, err := models.GetEventLog(db, limit)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"error":"failed to get event log"}`))
+			return
+		}
+		if events == nil {
+			events = []models.EventLogEntry{}
+		}
+
+		resp := handlers.EventLogResponse{
+			Events: events,
+			Total:  len(events),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(resp)
+	})
+
 	// Register routes
 	mux.Handle("/health", healthHandler)
+	mux.Handle("/events", eventsHandler)
 	mux.Handle("/services", servicesHandler)
 	mux.Handle("/services/", servicesHandler)
 
@@ -131,4 +176,70 @@ func main() {
 	}
 
 	logger.Info("Shutdown complete")
+}
+
+// streamEvents streams events using Server-Sent Events, polling for new events.
+func streamEvents(w http.ResponseWriter, r *http.Request, db *sql.DB, initialLimit int) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":"streaming not supported"}`))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// First send recent events as initial batch
+	events, err := models.GetEventLog(db, initialLimit)
+	if err != nil {
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		flusher.Flush()
+		return
+	}
+
+	lastID := 0
+	for _, e := range events {
+		data, _ := json.Marshal(e)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		if e.ID > lastID {
+			lastID = e.ID
+		}
+	}
+	flusher.Flush()
+
+	// If no events, get the current max ID so we only stream new ones
+	if lastID == 0 {
+		lastID, _ = models.GetMaxEventID(db)
+	}
+
+	// Poll for new events
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			newEvents, err := models.GetEventLogSince(db, lastID)
+			if err != nil {
+				continue
+			}
+			for _, e := range newEvents {
+				data, _ := json.Marshal(e)
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				if e.ID > lastID {
+					lastID = e.ID
+				}
+			}
+			if len(newEvents) > 0 {
+				flusher.Flush()
+			}
+		}
+	}
 }

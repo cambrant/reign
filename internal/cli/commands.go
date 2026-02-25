@@ -218,7 +218,15 @@ func (c *ActionCommand) Run() error {
 		return err
 	}
 
-	fmt.Printf("Service '%s' %s: %s\n", svc.ID, getActionPastTense(c.action), svc.State.Status)
+	status := svc.State.Status
+	switch status {
+	case "starting":
+		fmt.Printf("Service '%s' is starting\n", svc.ID)
+	case "stopping":
+		fmt.Printf("Service '%s' is stopping\n", svc.ID)
+	default:
+		fmt.Printf("Service '%s' %s: %s\n", svc.ID, getActionPastTense(c.action), status)
+	}
 	return nil
 }
 
@@ -534,6 +542,98 @@ func (c *EnableCommand) Run() error {
 	}
 
 	fmt.Printf("Enabled service '%s'\n", svc.ID)
+	return nil
+}
+
+// EventsCommand handles the 'events' subcommand.
+type EventsCommand struct {
+	client *Client
+	limit  int
+	json   bool
+	follow bool
+}
+
+// NewEventsCommand creates a new events command.
+func NewEventsCommand(client *Client, limit int, jsonOutput bool, follow bool) *EventsCommand {
+	return &EventsCommand{
+		client: client,
+		limit:  limit,
+		json:   jsonOutput,
+		follow: follow,
+	}
+}
+
+// Run executes the events command.
+func (c *EventsCommand) Run() error {
+	limit := c.limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	if c.follow {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Handle interrupt signal
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigChan
+			cancel()
+		}()
+
+		return c.client.FollowEvents(ctx, limit, func(data string) {
+			if c.json {
+				fmt.Println(data)
+				return
+			}
+			// Parse and format the event
+			var e EventLogEntry
+			if err := json.Unmarshal([]byte(data), &e); err != nil {
+				fmt.Println(data)
+				return
+			}
+			msg := e.Message
+			if len(msg) > 60 {
+				msg = msg[:57] + "..."
+			}
+			fmt.Printf("%s  %-20s  %-12s  %s\n",
+				e.CreatedAt.Format("2006-01-02 15:04:05"), e.ServiceName, e.EventType, msg)
+		})
+	}
+
+	resp, err := c.client.GetEventLog(limit)
+	if err != nil {
+		return err
+	}
+
+	if c.json {
+		data, err := json.MarshalIndent(resp, "", "  ")
+		if err != nil {
+			return fmt.Errorf("failed to marshal response: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
+
+	if len(resp.Events) == 0 {
+		fmt.Println("No events found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TIME\tSERVICE\tEVENT\tMESSAGE")
+	for _, e := range resp.Events {
+		msg := e.Message
+		if len(msg) > 60 {
+			msg = msg[:57] + "..."
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+			e.CreatedAt.Format("2006-01-02 15:04:05"), e.ServiceName, e.EventType, msg)
+	}
+	w.Flush()
+
+	fmt.Printf("\nShowing %d event(s)\n", len(resp.Events))
 	return nil
 }
 

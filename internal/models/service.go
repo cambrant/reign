@@ -414,6 +414,95 @@ func GetRecentEvents(db *sql.DB, limit int) ([]ServiceEvent, error) {
 	return events, rows.Err()
 }
 
+// EventLogEntry represents an event with service context for the unified event log.
+type EventLogEntry struct {
+	ID          int       `json:"id"`
+	ServiceID   string    `json:"service_id"`
+	ServiceName string    `json:"service_name"`
+	EventType   string    `json:"event_type"`
+	Message     string    `json:"message,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// GetEventLog retrieves events across all services with service names, ordered by time.
+func GetEventLog(db *sql.DB, limit int) ([]EventLogEntry, error) {
+	query := `
+		SELECT e.id, e.service_id, s.name, e.event_type, e.message, e.created_at
+		FROM service_events e
+		JOIN services s ON s.id = e.service_id
+		ORDER BY e.created_at DESC, e.id DESC
+		LIMIT ?
+	`
+	rows, err := db.Query(query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get event log: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []EventLogEntry
+	for rows.Next() {
+		var entry EventLogEntry
+		var message sql.NullString
+		var createdAt string
+		if err := rows.Scan(&entry.ID, &entry.ServiceID, &entry.ServiceName, &entry.EventType, &message, &createdAt); err != nil {
+			return nil, fmt.Errorf("failed to scan event log entry: %w", err)
+		}
+		if message.Valid {
+			entry.Message = message.String
+		}
+		entry.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		entries = append(entries, entry)
+	}
+
+	return entries, rows.Err()
+}
+
+// GetEventLogSince retrieves events with id greater than sinceID, ordered oldest first.
+func GetEventLogSince(db *sql.DB, sinceID int) ([]EventLogEntry, error) {
+	query := `
+		SELECT e.id, e.service_id, s.name, e.event_type, e.message, e.created_at
+		FROM service_events e
+		JOIN services s ON s.id = e.service_id
+		WHERE e.id > ?
+		ORDER BY e.id ASC
+	`
+	rows, err := db.Query(query, sinceID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get event log: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []EventLogEntry
+	for rows.Next() {
+		var entry EventLogEntry
+		var message sql.NullString
+		var createdAt string
+		if err := rows.Scan(&entry.ID, &entry.ServiceID, &entry.ServiceName, &entry.EventType, &message, &createdAt); err != nil {
+			return nil, fmt.Errorf("failed to scan event log entry: %w", err)
+		}
+		if message.Valid {
+			entry.Message = message.String
+		}
+		entry.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		entries = append(entries, entry)
+	}
+
+	return entries, rows.Err()
+}
+
+// GetMaxEventID returns the current maximum event ID, or 0 if no events exist.
+func GetMaxEventID(db *sql.DB) (int, error) {
+	var maxID sql.NullInt64
+	err := db.QueryRow("SELECT MAX(id) FROM service_events").Scan(&maxID)
+	if err != nil {
+		return 0, err
+	}
+	if maxID.Valid {
+		return int(maxID.Int64), nil
+	}
+	return 0, nil
+}
+
 // GetServiceWithState retrieves a service with its current state.
 func GetServiceWithState(db *sql.DB, id string) (*ServiceWithState, error) {
 	service, err := GetServiceByID(db, id)

@@ -56,6 +56,8 @@ func Run(args []string) (bool, error) {
 		return true, runDeleteCommand(args[2:])
 	case "logs":
 		return true, runLogsCommand(args[2:])
+	case "events":
+		return true, runEventsCommand(args[2:])
 	case "enable":
 		return true, runEnableCommand(args[2:])
 	case "disable":
@@ -359,6 +361,36 @@ func runEnableCommand(args []string) error {
 	return cmd.Run()
 }
 
+func runEventsCommand(args []string) error {
+	fs := flag.NewFlagSet("events", flag.ExitOnError)
+	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
+	limit := fs.Int("n", 50, "Number of events to show")
+	limitL := fs.Int("limit", 50, "Number of events to show (long form)")
+	jsonOutput := fs.Bool("json", false, "Output in JSON format")
+	follow := fs.Bool("f", false, "Follow events in real time")
+	followL := fs.Bool("follow", false, "Follow events in real time (long form)")
+	fs.Parse(args)
+
+	addr := *server
+	if addr == "" {
+		addr = os.Getenv("REIGN_SERVER")
+	}
+	if addr == "" {
+		addr = defaultServerAddr
+	}
+
+	l := *limit
+	if *limitL != 50 {
+		l = *limitL
+	}
+
+	f := *follow || *followL
+
+	client := NewClient(addr)
+	cmd := NewEventsCommand(client, l, *jsonOutput, f)
+	return cmd.Run()
+}
+
 func runDisableCommand(args []string) error {
 	fs := flag.NewFlagSet("disable", flag.ExitOnError)
 	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
@@ -398,6 +430,8 @@ func runHelpCommand(args []string) error {
 			printDeleteHelp()
 		case "logs":
 			printLogsHelp()
+		case "events":
+			printEventsHelp()
 		case "enable", "disable":
 			printEnableDisableHelp(args[0])
 		default:
@@ -426,6 +460,7 @@ Commands:
   stop            Stop a service
   restart         Restart a service
   logs            View service logs
+  events          View event log across all services
   enable          Enable a service
   disable         Disable a service
   help            Show help for a command
@@ -582,6 +617,24 @@ Examples:
   reign logs myservice
   reign logs -n 50 myservice
   reign logs --lines 200 myservice
+`)
+}
+
+func printEventsHelp() {
+	fmt.Print(`Usage: reign events [options]
+
+View the unified event log across all services, ordered by time.
+Shows service state changes, starts, stops, failures, and other lifecycle events.
+
+Options:
+  --server        Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
+  -n, --limit     Number of events to show (default: 50)
+  --json          Output in JSON format
+
+Examples:
+  reign events
+  reign events -n 100
+  reign events --json
 `)
 }
 

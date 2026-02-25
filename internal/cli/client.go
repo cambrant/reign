@@ -245,6 +245,38 @@ func (c *Client) RestartService(id string) (*ServiceWithState, error) {
 	return &resp, nil
 }
 
+// EventLogEntry represents an event with service context.
+type EventLogEntry struct {
+	ID          int       `json:"id"`
+	ServiceID   string    `json:"service_id"`
+	ServiceName string    `json:"service_name"`
+	EventType   string    `json:"event_type"`
+	Message     string    `json:"message,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// EventLogResponse represents the response for the event log.
+type EventLogResponse struct {
+	Events []EventLogEntry `json:"events"`
+	Total  int             `json:"total"`
+}
+
+// GetEventLog retrieves the unified event log.
+func (c *Client) GetEventLog(limit int) (*EventLogResponse, error) {
+	path := fmt.Sprintf("/events?limit=%d", limit)
+	data, err := c.doRequest(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp EventLogResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return &resp, nil
+}
+
 // GetServiceLogs retrieves logs for a service.
 func (c *Client) GetServiceLogs(id string, lines int) (string, error) {
 	path := fmt.Sprintf("/services/%s/logs?lines=%d", id, lines)
