@@ -129,11 +129,15 @@ func main() {
 
 	// Create HTTP server
 	server := &http.Server{
-		Addr:         cfg.ListenAddr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		Handler:     mux,
+		ReadTimeout: 30 * time.Second,
+		IdleTimeout: 60 * time.Second,
+	}
+
+	// Bind to the port early so we fail fast if another instance is running
+	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		logger.Fatal("Failed to bind to %s (is another reign instance running?): %v", cfg.ListenAddr, err)
 	}
 
 	// Start services (sync first if keepRunning is enabled)
@@ -147,7 +151,7 @@ func main() {
 	// Start HTTP server in goroutine
 	go func() {
 		logger.Info("HTTP API server starting")
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logger.Fatal("HTTP server error: %v", err)
 		}
 	}()

@@ -16,7 +16,8 @@ const defaultServerAddr = "http://127.0.0.1:7890"
 // Returns true if a CLI command was executed (so the server shouldn't start).
 func Run(args []string) (bool, error) {
 	if len(args) < 2 {
-		return false, nil
+		printGeneralHelp()
+		return true, nil
 	}
 
 	// Check if the first argument is a CLI command
@@ -68,8 +69,10 @@ func Run(args []string) (bool, error) {
 		fmt.Println(version.Get())
 		return true, nil
 	default:
-		// Not a recognized command, let server mode handle it
-		return false, nil
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n\n", cmd)
+		printGeneralHelp()
+		os.Exit(1)
+		return true, nil
 	}
 }
 

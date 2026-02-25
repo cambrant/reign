@@ -413,6 +413,38 @@ func (h *ServicesHandler) getServiceLogs(w http.ResponseWriter, r *http.Request,
 	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
 }
 
+// streamServiceLogs streams logs using Server-Sent Events.
+func (h *ServicesHandler) streamServiceLogs(w http.ResponseWriter, r *http.Request, id string, lines int) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ctx := r.Context()
+	err := h.orchestrator.StreamServiceLogs(ctx, id, lines, func(line string) {
+		fmt.Fprintf(w, "data: %s\n\n", line)
+		flusher.Flush()
+	})
+
+	if err != nil && err != r.Context().Err() {
+		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
+		flusher.Flush()
+	}
+}
+
+// EventLogResponse represents the response for the event log.
+type EventLogResponse struct {
+	Events []models.EventLogEntry `json:"events"`
+	Total  int                    `json:"total"`
+}
+
 // getServiceStats handles GET /services/{id}/stats.
 func (h *ServicesHandler) getServiceStats(w http.ResponseWriter, r *http.Request, id string) {
 	stats, err := h.orchestrator.GetServiceStats(r.Context(), id)

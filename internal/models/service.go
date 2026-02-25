@@ -151,7 +151,7 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	query := `
 		SELECT id, name, type, path, command, enabled, infrastructure, created_at, updated_at
 		FROM services
-		ORDER BY name
+		ORDER BY id
 	`
 	rows, err := db.Query(query)
 	if err != nil {
