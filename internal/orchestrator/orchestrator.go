@@ -337,6 +337,181 @@ func (o *Orchestrator) RestartService(ctx context.Context, id string) error {
 	return o.StartService(ctx, id)
 }
 
+// StartServiceAsync validates and initiates a service start in the background.
+// It returns the service with its current state immediately after setting the status to "starting".
+func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, error) {
+	service, err := models.GetServiceByID(o.db, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service: %w", err)
+	}
+	if service == nil {
+		return nil, fmt.Errorf("service not found: %s", id)
+	}
+
+	state, err := models.GetServiceState(o.db, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service state: %w", err)
+	}
+	if state != nil && state.Status == models.StatusDisabled {
+		return nil, fmt.Errorf("service is disabled: %s", id)
+	}
+
+	// Update status to starting
+	if err := models.UpdateServiceStatus(o.db, id, models.StatusStarting); err != nil {
+		return nil, fmt.Errorf("failed to update status: %w", err)
+	}
+	models.LogEvent(o.db, id, "starting", "Service start initiated")
+	models.ResetRestartCount(o.db, id)
+
+	// Build the response before launching the goroutine to avoid races
+	result := &models.ServiceWithState{Service: *service}
+	if state != nil {
+		result.State = *state
+	}
+	result.State.Status = models.StatusStarting
+
+	// Run the actual start in the background
+	go func() {
+		ctx := context.Background()
+		exec := o.getExecutor(service.Type)
+		if exec == nil {
+			models.SetServiceFailed(o.db, id, "unknown service type")
+			return
+		}
+
+		if service.Type == models.ServiceTypeCompose {
+			logger.Debug("Pulling images for %s", id)
+			if err := exec.Pull(ctx, service); err != nil {
+				logger.Warn("Failed to pull images for %s: %v", id, err)
+				models.LogEvent(o.db, id, "pull_failed", err.Error())
+			} else {
+				models.LogEvent(o.db, id, "pulled", "Images pulled successfully")
+			}
+		}
+
+		if err := exec.Start(ctx, service); err != nil {
+			models.SetServiceFailed(o.db, id, err.Error())
+			models.LogEvent(o.db, id, "failed", err.Error())
+			logger.Error("Failed to start service %s: %v", id, err)
+			return
+		}
+
+		var pid *int
+		if service.Type == models.ServiceTypeBinary {
+			pid = o.binaryExecutor.GetPID(id)
+		}
+
+		if err := models.SetServiceStarted(o.db, id, pid); err != nil {
+			logger.Error("Failed to update status for %s: %v", id, err)
+			return
+		}
+		models.LogEvent(o.db, id, "started", "Service started successfully")
+	}()
+
+	return result, nil
+}
+
+// StopServiceAsync validates and initiates a service stop in the background.
+// It returns the service with its current state immediately after setting the status to "stopping".
+func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, error) {
+	service, err := models.GetServiceByID(o.db, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service: %w", err)
+	}
+	if service == nil {
+		return nil, fmt.Errorf("service not found: %s", id)
+	}
+
+	state, err := models.GetServiceState(o.db, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service state: %w", err)
+	}
+
+	// Update status to stopping
+	if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
+		return nil, fmt.Errorf("failed to update status: %w", err)
+	}
+	models.LogEvent(o.db, id, "stopping", "Service stop initiated")
+
+	// Build the response before launching the goroutine to avoid races
+	result := &models.ServiceWithState{Service: *service}
+	if state != nil {
+		result.State = *state
+	}
+	result.State.Status = models.StatusStopping
+
+	// Run the actual stop in the background
+	go func() {
+		ctx := context.Background()
+		exec := o.getExecutor(service.Type)
+		if exec == nil {
+			logger.Error("Unknown service type for %s: %s", id, service.Type)
+			return
+		}
+
+		if err := exec.Stop(ctx, service); err != nil {
+			models.LogEvent(o.db, id, "stop_failed", err.Error())
+			logger.Error("Failed to stop service %s: %v", id, err)
+			return
+		}
+
+		if err := models.SetServiceStopped(o.db, id); err != nil {
+			logger.Error("Failed to update status for %s: %v", id, err)
+			return
+		}
+		models.LogEvent(o.db, id, "stopped", "Service stopped successfully")
+	}()
+
+	return result, nil
+}
+
+// RestartServiceAsync validates and initiates a service restart in the background.
+// It returns the service with its current state immediately after setting the status to "stopping".
+func (o *Orchestrator) RestartServiceAsync(id string) (*models.ServiceWithState, error) {
+	service, err := models.GetServiceByID(o.db, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service: %w", err)
+	}
+	if service == nil {
+		return nil, fmt.Errorf("service not found: %s", id)
+	}
+
+	state, err := models.GetServiceState(o.db, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get service state: %w", err)
+	}
+	if state != nil && state.Status == models.StatusDisabled {
+		return nil, fmt.Errorf("service is disabled: %s", id)
+	}
+
+	// Update status to stopping (first phase of restart)
+	if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
+		return nil, fmt.Errorf("failed to update status: %w", err)
+	}
+	models.LogEvent(o.db, id, "restarting", "Service restart initiated")
+
+	// Build the response before launching the goroutine to avoid races
+	result := &models.ServiceWithState{Service: *service}
+	if state != nil {
+		result.State = *state
+	}
+	result.State.Status = models.StatusStopping
+
+	// Run the actual restart in the background
+	go func() {
+		ctx := context.Background()
+		if err := o.StopService(ctx, id); err != nil {
+			logger.Warn("Error stopping service %s during restart: %v", id, err)
+		}
+		time.Sleep(1 * time.Second)
+		if err := o.StartService(ctx, id); err != nil {
+			logger.Error("Failed to start service %s during restart: %v", id, err)
+		}
+	}()
+
+	return result, nil
+}
+
 // GetServiceStatus returns the current status of a service by querying the executor.
 func (o *Orchestrator) GetServiceStatus(ctx context.Context, id string) (models.ServiceStatus, error) {
 	service, err := models.GetServiceByID(o.db, id)

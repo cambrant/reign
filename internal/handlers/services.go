@@ -345,7 +345,8 @@ func (h *ServicesHandler) deleteService(w http.ResponseWriter, r *http.Request, 
 
 // startService handles POST /services/{id}/start.
 func (h *ServicesHandler) startService(w http.ResponseWriter, r *http.Request, id string) {
-	if err := h.orchestrator.StartService(r.Context(), id); err != nil {
+	service, err := h.orchestrator.StartServiceAsync(id)
+	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -358,13 +359,13 @@ func (h *ServicesHandler) startService(w http.ResponseWriter, r *http.Request, i
 		return
 	}
 
-	service, _ := models.GetServiceWithState(h.db, id)
-	writeJSON(w, http.StatusOK, service)
+	writeJSON(w, http.StatusAccepted, service)
 }
 
 // stopService handles POST /services/{id}/stop.
 func (h *ServicesHandler) stopService(w http.ResponseWriter, r *http.Request, id string) {
-	if err := h.orchestrator.StopService(r.Context(), id); err != nil {
+	service, err := h.orchestrator.StopServiceAsync(id)
+	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -373,13 +374,13 @@ func (h *ServicesHandler) stopService(w http.ResponseWriter, r *http.Request, id
 		return
 	}
 
-	service, _ := models.GetServiceWithState(h.db, id)
-	writeJSON(w, http.StatusOK, service)
+	writeJSON(w, http.StatusAccepted, service)
 }
 
 // restartService handles POST /services/{id}/restart.
 func (h *ServicesHandler) restartService(w http.ResponseWriter, r *http.Request, id string) {
-	if err := h.orchestrator.RestartService(r.Context(), id); err != nil {
+	service, err := h.orchestrator.RestartServiceAsync(id)
+	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
