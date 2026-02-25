@@ -294,3 +294,62 @@ func (c *Client) GetServiceLogs(id string, lines int) (string, error) {
 
 	return resp.Logs, nil
 }
+
+// FollowServiceLogs streams logs for a service, calling onLine for each line.
+// Blocks until ctx is cancelled.
+func (c *Client) FollowServiceLogs(ctx context.Context, id string, lines int, onLine func(line string)) error {
+	path := fmt.Sprintf("/services/%s/logs?follow=true&lines=%d", id, lines)
+	return c.streamSSE(ctx, path, onLine)
+}
+
+// FollowEvents streams events, calling onData for each event JSON.
+// Blocks until ctx is cancelled.
+func (c *Client) FollowEvents(ctx context.Context, limit int, onData func(line string)) error {
+	path := fmt.Sprintf("/events?follow=true&limit=%d", limit)
+	return c.streamSSE(ctx, path, onData)
+}
+
+// streamSSE connects to an SSE endpoint and calls onData for each data line.
+func (c *Client) streamSSE(ctx context.Context, path string, onData func(line string)) error {
+	url := c.baseURL + path
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+
+	// Use a client without timeout for streaming
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to connect to reign server at %s: %w", c.baseURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		var apiErr APIError
+		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error != "" {
+			return fmt.Errorf("%s", apiErr.Error)
+		}
+		return fmt.Errorf("API error: %s", resp.Status)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			onData(strings.TrimPrefix(line, "data: "))
+		} else if strings.HasPrefix(line, "event: error") {
+			// Next data line will be the error message
+			if scanner.Scan() {
+				errLine := scanner.Text()
+				if strings.HasPrefix(errLine, "data: ") {
+					return fmt.Errorf("%s", strings.TrimPrefix(errLine, "data: "))
+				}
+			}
+		}
+	}
+
+	return scanner.Err()
+}

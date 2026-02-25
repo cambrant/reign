@@ -342,6 +342,8 @@ func runLogsCommand(args []string) error {
 	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
 	lines := fs.Int("n", 100, "Number of lines to show")
 	linesL := fs.Int("lines", 100, "Number of lines to show (long form)")
+	follow := fs.Bool("f", false, "Follow log output")
+	followL := fs.Bool("follow", false, "Follow log output (long form)")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -361,8 +363,10 @@ func runLogsCommand(args []string) error {
 		l = *linesL
 	}
 
+	f := *follow || *followL
+
 	client := NewClient(addr)
-	cmd := NewLogsCommand(client, fs.Arg(0), l)
+	cmd := NewLogsCommand(client, fs.Arg(0), l, f)
 	return cmd.Run()
 }
 

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -165,6 +166,33 @@ func (e *BinaryExecutor) GetLogs(ctx context.Context, service *models.Service, l
 		return "", fmt.Errorf("failed to get logs: %s: %w", string(output), err)
 	}
 	return string(output), nil
+}
+
+// FollowLogs streams logs from journald for a binary service.
+// It blocks until the context is cancelled.
+func (e *BinaryExecutor) FollowLogs(ctx context.Context, service *models.Service, lines int, w func(line string)) error {
+	args := []string{"-t", service.Name, "--no-pager", "-f"}
+	if lines > 0 {
+		args = append(args, "-n", fmt.Sprintf("%d", lines))
+	}
+
+	cmd := exec.CommandContext(ctx, "journalctl", args...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start log stream: %w", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		w(scanner.Text())
+	}
+
+	cmd.Wait()
+	return ctx.Err()
 }
 
 // parseArgs splits a command string into arguments, respecting quotes.

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -94,6 +95,36 @@ func (e *ComposeExecutor) GetLogs(ctx context.Context, service *models.Service, 
 		return "", fmt.Errorf("docker compose logs failed: %s: %w", string(output), err)
 	}
 	return string(output), nil
+}
+
+// FollowLogs streams logs for a Docker Compose service to the given writer.
+// It blocks until the context is cancelled.
+func (e *ComposeExecutor) FollowLogs(ctx context.Context, service *models.Service, lines int, w func(line string)) error {
+	args := []string{"compose", "logs", "--no-color", "--follow"}
+	if lines > 0 {
+		args = append(args, "--tail", fmt.Sprintf("%d", lines))
+	}
+
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = service.Path
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	cmd.Stderr = cmd.Stdout // merge stderr into stdout
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start log stream: %w", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		w(scanner.Text())
+	}
+
+	cmd.Wait()
+	return ctx.Err()
 }
 
 // GetContainerStats retrieves resource usage stats for Docker Compose containers.

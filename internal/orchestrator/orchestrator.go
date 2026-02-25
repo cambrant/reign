@@ -419,6 +419,26 @@ func (o *Orchestrator) GetServiceLogs(ctx context.Context, id string, lines int)
 	}
 }
 
+// StreamServiceLogs streams logs for a service, blocking until ctx is cancelled.
+func (o *Orchestrator) StreamServiceLogs(ctx context.Context, id string, lines int, onLine func(line string)) error {
+	service, err := models.GetServiceByID(o.db, id)
+	if err != nil {
+		return fmt.Errorf("failed to get service: %w", err)
+	}
+	if service == nil {
+		return fmt.Errorf("service not found: %s", id)
+	}
+
+	switch service.Type {
+	case models.ServiceTypeCompose:
+		return o.composeExecutor.FollowLogs(ctx, service, lines, onLine)
+	case models.ServiceTypeBinary:
+		return o.binaryExecutor.FollowLogs(ctx, service, lines, onLine)
+	default:
+		return fmt.Errorf("unknown service type: %s", service.Type)
+	}
+}
+
 // StartHealthChecker starts the background health check loop.
 func (o *Orchestrator) StartHealthChecker(ctx context.Context) {
 	o.wg.Add(1)

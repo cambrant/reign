@@ -529,14 +529,16 @@ type LogsCommand struct {
 	client    *Client
 	serviceID string
 	lines     int
+	follow    bool
 }
 
 // NewLogsCommand creates a new logs command.
-func NewLogsCommand(client *Client, serviceID string, lines int) *LogsCommand {
+func NewLogsCommand(client *Client, serviceID string, lines int, follow bool) *LogsCommand {
 	return &LogsCommand{
 		client:    client,
 		serviceID: serviceID,
 		lines:     lines,
+		follow:    follow,
 	}
 }
 
@@ -549,6 +551,23 @@ func (c *LogsCommand) Run() error {
 	lines := c.lines
 	if lines <= 0 {
 		lines = 100
+	}
+
+	if c.follow {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Handle interrupt signal
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		go func() {
+			<-sigChan
+			cancel()
+		}()
+
+		return c.client.FollowServiceLogs(ctx, c.serviceID, lines, func(line string) {
+			fmt.Println(line)
+		})
 	}
 
 	logs, err := c.client.GetServiceLogs(c.serviceID, lines)

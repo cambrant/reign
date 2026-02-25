@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -387,17 +388,23 @@ func (h *ServicesHandler) restartService(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	service, _ := models.GetServiceWithState(h.db, id)
-	writeJSON(w, http.StatusOK, service)
+	writeJSON(w, http.StatusAccepted, service)
 }
 
 // getServiceLogs handles GET /services/{id}/logs.
 func (h *ServicesHandler) getServiceLogs(w http.ResponseWriter, r *http.Request, id string) {
+	follow := r.URL.Query().Get("follow") == "true"
+
 	lines := 100
 	if linesParam := r.URL.Query().Get("lines"); linesParam != "" {
 		if n, err := strconv.Atoi(linesParam); err == nil && n > 0 {
 			lines = n
 		}
+	}
+
+	if follow {
+		h.streamServiceLogs(w, r, id, lines)
+		return
 	}
 
 	logs, err := h.orchestrator.GetServiceLogs(r.Context(), id, lines)
