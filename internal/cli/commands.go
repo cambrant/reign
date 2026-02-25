@@ -166,6 +166,57 @@ func (c *ShowCommand) Run() error {
 	return nil
 }
 
+// DumpCommand handles the 'dump' subcommand.
+type DumpCommand struct {
+	client    *Client
+	serviceID string
+}
+
+// NewDumpCommand creates a new dump command.
+func NewDumpCommand(client *Client, serviceID string) *DumpCommand {
+	return &DumpCommand{
+		client:    client,
+		serviceID: serviceID,
+	}
+}
+
+// Run executes the dump command.
+func (c *DumpCommand) Run() error {
+	if c.serviceID == "" {
+		return fmt.Errorf("service ID is required")
+	}
+
+	resp, err := c.client.GetService(c.serviceID)
+	if err != nil {
+		return err
+	}
+
+	serviceDef := struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		Type           string `json:"type"`
+		Path           string `json:"path"`
+		Command        string `json:"command,omitempty"`
+		Enabled        bool   `json:"enabled"`
+		Infrastructure bool   `json:"infrastructure"`
+	}{
+		ID:             resp.ID,
+		Name:           resp.Name,
+		Type:           resp.Type,
+		Path:           resp.Path,
+		Command:        resp.Command,
+		Enabled:        resp.Enabled,
+		Infrastructure: resp.Infrastructure,
+	}
+
+	data, err := json.Marshal(serviceDef)
+	if err != nil {
+		return fmt.Errorf("failed to marshal service: %w", err)
+	}
+	fmt.Println(string(data))
+	return nil
+}
+
 // StatusCommand handles the 'status' subcommand (alias for list).
 type StatusCommand struct {
 	*ListCommand

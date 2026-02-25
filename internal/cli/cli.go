@@ -43,6 +43,8 @@ func Run(args []string) (bool, error) {
 		return true, runListCommand(args[2:])
 	case "show", "get":
 		return true, runShowCommand(args[2:])
+	case "dump":
+		return true, runDumpCommand(args[2:])
 	case "start":
 		return true, runActionCommand("start", args[2:])
 	case "stop":
@@ -103,6 +105,28 @@ func runListCommand(args []string) error {
 
 	client := NewClient(addr)
 	cmd := NewListCommand(client, *jsonOutput)
+	return cmd.Run()
+}
+
+func runDumpCommand(args []string) error {
+	fs := flag.NewFlagSet("dump", flag.ExitOnError)
+	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: reign dump [options] <service-id>")
+	}
+
+	addr := *server
+	if addr == "" {
+		addr = os.Getenv("REIGN_SERVER")
+	}
+	if addr == "" {
+		addr = defaultServerAddr
+	}
+
+	client := NewClient(addr)
+	cmd := NewDumpCommand(client, fs.Arg(0))
 	return cmd.Run()
 }
 
@@ -423,6 +447,8 @@ func runHelpCommand(args []string) error {
 			printListHelp()
 		case "show", "get":
 			printShowHelp()
+		case "dump":
+			printDumpHelp()
 		case "create", "add":
 			printCreateHelp()
 		case "update", "set":
@@ -456,6 +482,7 @@ Usage:
 Commands:
   list, ls        List all services and their status
   show, get       Show detailed information about a service
+  dump            Dump a service definition as compact JSON
   create, add     Create a new service
   update, set     Update an existing service
   delete, rm      Delete a service
@@ -513,6 +540,22 @@ Examples:
   reign show myservice
   reign show --json myservice > service.json
   reign show myservice --json | reign update myservice -f -
+`)
+}
+
+func printDumpHelp() {
+	fmt.Print(`Usage: reign dump [options] <service-id>
+
+Dump the JSON definition of a service on a single line. The output is
+suitable for defining a new service or updating an existing one.
+
+Options:
+  --server    Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
+
+Examples:
+  reign dump myservice
+  reign dump myservice | reign create -f -
+  reign dump myservice | reign update myservice -f -
 `)
 }
 
