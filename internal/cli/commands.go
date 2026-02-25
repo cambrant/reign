@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 )
 
 // ListCommand handles the 'list' subcommand.
@@ -568,9 +569,41 @@ func (c *LogsCommand) Run() error {
 			cancel()
 		}()
 
-		return c.client.FollowServiceLogs(ctx, c.serviceID, lines, func(line string) {
-			fmt.Println(line)
-		})
+		// Reattach loop: reconnect to log stream across service restarts.
+		reconnectLines := lines
+		for {
+			err := c.client.FollowServiceLogs(ctx, c.serviceID, reconnectLines, func(line string) {
+				fmt.Println(line)
+			})
+
+			// User cancelled (Ctrl+C) — exit cleanly.
+			if ctx.Err() != nil {
+				return nil
+			}
+
+			// Non-retryable errors (e.g. service deleted).
+			if err != nil {
+				errMsg := err.Error()
+				if strings.Contains(errMsg, "not found") {
+					return err
+				}
+			}
+
+			// The stream ended without cancellation — the service likely
+			// stopped or restarted. Wait briefly, then reconnect.
+			fmt.Fprintf(os.Stderr, "\n--- Log stream ended. Waiting for service to restart... ---\n")
+
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(2 * time.Second):
+			}
+
+			fmt.Fprintf(os.Stderr, "--- Reattaching to logs... ---\n")
+			// On reconnect, only fetch a few recent lines to avoid
+			// repeating output the user has already seen.
+			reconnectLines = 10
+		}
 	}
 
 	logs, err := c.client.GetServiceLogs(c.serviceID, lines)
