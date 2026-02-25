@@ -182,6 +182,7 @@ func runCreateCommand(args []string) error {
 	// JSON input options
 	jsonFile := fs.String("f", "", "JSON file containing service definition")
 	jsonFileL := fs.String("file", "", "JSON file containing service definition (long form)")
+	jsonStr := fs.String("json", "", "Inline JSON string containing service definition")
 
 	// Individual field flags
 	id := fs.String("id", "", "Service ID (required)")
@@ -208,9 +209,11 @@ func runCreateCommand(args []string) error {
 		file = *jsonFileL
 	}
 
-	// Check for stdin input
+	// Check for inline JSON string, stdin, or file input
 	var jsonData string
-	if file == "-" {
+	if *jsonStr != "" {
+		jsonData = *jsonStr
+	} else if file == "-" {
 		data, err := io.ReadAll(os.Stdin)
 		if err != nil {
 			return fmt.Errorf("failed to read stdin: %w", err)
@@ -573,6 +576,7 @@ Aliases: add
 Options:
   --server          Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
   -f, --file        JSON file containing service definition (use '-' for stdin)
+  -json             Inline JSON string containing service definition
 
   Service fields:
   --id              Service ID (required)
@@ -589,6 +593,7 @@ Examples:
   reign create --id myservice --name "My Service" --type compose --path /opt/myservice/docker-compose.yml
   reign create --id myapp --name "My App" --type binary --path /usr/local/bin/myapp --command "serve --port 8080"
   reign create -f service.json
+  reign create -json '{"id":"myapp","name":"My App","type":"binary","path":"/usr/local/bin/myapp"}'
   cat service.json | reign create -f -
   reign show --json oldservice | reign create --id newservice -f -
 `)
