@@ -77,7 +77,6 @@ func (o *Orchestrator) StartupServices(ctx context.Context, syncFirst bool) erro
 			continue
 		}
 
-		logger.Info("Starting infrastructure service: %s", service.ID)
 		if err := o.StartService(ctx, service.ID); err != nil {
 			logger.Error("Failed to start infrastructure service %s: %v", service.ID, err)
 			// Continue with other infrastructure services
@@ -104,7 +103,6 @@ func (o *Orchestrator) StartupServices(ctx context.Context, syncFirst bool) erro
 			continue
 		}
 
-		logger.Info("Starting service: %s", service.ID)
 		if err := o.StartService(ctx, service.ID); err != nil {
 			logger.Error("Failed to start service %s: %v", service.ID, err)
 			continue
@@ -238,6 +236,8 @@ func (o *Orchestrator) StartService(ctx context.Context, id string) error {
 		return fmt.Errorf("service is disabled: %s", id)
 	}
 
+	logger.Info("Starting service: %s", id)
+
 	// Update status to starting
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStarting); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
@@ -284,6 +284,7 @@ func (o *Orchestrator) StartService(ctx context.Context, id string) error {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 	models.LogEvent(o.db, id, "started", "Service started successfully")
+	logger.Info("Service started: %s", id)
 
 	return nil
 }
