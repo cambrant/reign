@@ -86,6 +86,7 @@ type ServiceRequest struct {
 	Type           string `json:"type,omitempty"`
 	Path           string `json:"path,omitempty"`
 	Command        string `json:"command,omitempty"`
+	WorkDir        string `json:"work_dir,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
@@ -103,6 +104,7 @@ type ServiceWithState struct {
 	Type           string       `json:"type"`
 	Path           string       `json:"path"`
 	Command        string       `json:"command,omitempty"`
+	WorkDir        string       `json:"work_dir,omitempty"`
 	Enabled        bool         `json:"enabled"`
 	Infrastructure bool         `json:"infrastructure"`
 	CreatedAt      time.Time    `json:"created_at"`

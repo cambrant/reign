@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -48,6 +49,7 @@ func createSchema(db *sql.DB) error {
 		type            TEXT NOT NULL CHECK (type IN ('compose', 'binary')),
 		path            TEXT NOT NULL,
 		command         TEXT,
+		work_dir        TEXT,
 		enabled         INTEGER NOT NULL DEFAULT 1,
 		infrastructure  INTEGER NOT NULL DEFAULT 0,
 		created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -78,5 +80,18 @@ func createSchema(db *sql.DB) error {
 	`
 
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Migrate existing databases: add work_dir column if missing
+	_, err = db.Exec("ALTER TABLE services ADD COLUMN work_dir TEXT")
+	if err != nil {
+		// Ignore "duplicate column" error — column already exists
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
+	return nil
 }

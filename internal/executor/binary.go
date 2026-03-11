@@ -55,7 +55,13 @@ func (e *BinaryExecutor) Start(ctx context.Context, service *models.Service) err
 	cmdArgs = append(cmdArgs, args...)
 
 	cmd := exec.Command("systemd-cat", cmdArgs...)
-	cmd.Dir = service.Path
+
+	// Use WorkDir as the process working directory, falling back to Path
+	if service.WorkDir != "" {
+		cmd.Dir = service.WorkDir
+	} else if service.Path != "" {
+		cmd.Dir = service.Path
+	}
 
 	// Set up process group for clean termination
 	cmd.SysProcAttr = &syscall.SysProcAttr{

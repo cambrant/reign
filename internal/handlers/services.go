@@ -33,6 +33,7 @@ type ServiceRequest struct {
 	Type           string `json:"type"`
 	Path           string `json:"path"`
 	Command        string `json:"command,omitempty"`
+	WorkDir        string `json:"work_dir,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
@@ -194,8 +195,12 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "type must be 'compose' or 'binary'")
 		return
 	}
-	if req.Path == "" {
-		writeError(w, http.StatusBadRequest, "path is required")
+	if req.Type == "compose" && req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required for compose services")
+		return
+	}
+	if req.Type == "binary" && req.Command == "" {
+		writeError(w, http.StatusBadRequest, "command is required for binary services")
 		return
 	}
 
@@ -217,6 +222,7 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		Type:           models.ServiceType(req.Type),
 		Path:           req.Path,
 		Command:        req.Command,
+		WorkDir:        req.WorkDir,
 		Enabled:        true,
 		Infrastructure: false,
 	}
@@ -229,7 +235,7 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if err := service.Create(h.db); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create service")
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create service: %v", err))
 		return
 	}
 
@@ -276,6 +282,12 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 	}
 	if req.Path != "" {
 		service.Path = req.Path
+	}
+	if req.Command != "" {
+		service.Command = req.Command
+	}
+	if req.WorkDir != "" {
+		service.WorkDir = req.WorkDir
 	}
 	if req.Enabled != nil {
 		service.Enabled = *req.Enabled

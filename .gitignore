@@ -1,19 +1,21 @@
 # Reign ignore patterns
 
 # Binary
-reign
+/reign
 
 # Database
-*.db
-*.db-journal
-data/
+/*.db
+/*.db-journal
 
 # Coverage
 coverage.out
 coverage.html
 
+/old
+/deploy.sh
+
 # Config (use config.json.sample as template)
-config.json
+/config.json
 
 # IDE
 .idea/

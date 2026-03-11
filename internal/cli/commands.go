@@ -102,6 +102,7 @@ func (c *ShowCommand) Run() error {
 			Type           string `json:"type"`
 			Path           string `json:"path"`
 			Command        string `json:"command,omitempty"`
+			WorkDir        string `json:"work_dir,omitempty"`
 			Enabled        bool   `json:"enabled"`
 			Infrastructure bool   `json:"infrastructure"`
 		}{
@@ -110,6 +111,7 @@ func (c *ShowCommand) Run() error {
 			Type:           resp.Type,
 			Path:           resp.Path,
 			Command:        resp.Command,
+			WorkDir:        resp.WorkDir,
 			Enabled:        resp.Enabled,
 			Infrastructure: resp.Infrastructure,
 		}
@@ -128,6 +130,9 @@ func (c *ShowCommand) Run() error {
 	fmt.Printf("  Path:           %s\n", resp.Path)
 	if resp.Command != "" {
 		fmt.Printf("  Command:        %s\n", resp.Command)
+	}
+	if resp.WorkDir != "" {
+		fmt.Printf("  Work Dir:       %s\n", resp.WorkDir)
 	}
 	fmt.Printf("  Enabled:        %v\n", resp.Enabled)
 	fmt.Printf("  Infrastructure: %v\n", resp.Infrastructure)
@@ -201,6 +206,7 @@ func (c *DumpCommand) Run() error {
 		Type           string `json:"type"`
 		Path           string `json:"path"`
 		Command        string `json:"command,omitempty"`
+		WorkDir        string `json:"work_dir,omitempty"`
 		Enabled        bool   `json:"enabled"`
 		Infrastructure bool   `json:"infrastructure"`
 	}{
@@ -209,6 +215,7 @@ func (c *DumpCommand) Run() error {
 		Type:           resp.Type,
 		Path:           resp.Path,
 		Command:        resp.Command,
+		WorkDir:        resp.WorkDir,
 		Enabled:        resp.Enabled,
 		Infrastructure: resp.Infrastructure,
 	}
@@ -316,6 +323,7 @@ type CreateUpdateOptions struct {
 	Type           string
 	Path           string
 	Command        string
+	WorkDir        string
 	Enabled        *bool
 	Infrastructure *bool
 }
@@ -348,8 +356,11 @@ func (c *CreateCommand) Run() error {
 	if req.Type != "compose" && req.Type != "binary" {
 		return fmt.Errorf("type must be 'compose' or 'binary'")
 	}
-	if req.Path == "" {
-		return fmt.Errorf("path is required (use --path or provide in JSON)")
+	if req.Type == "compose" && req.Path == "" {
+		return fmt.Errorf("path is required for compose services (use --path or provide in JSON)")
+	}
+	if req.Type == "binary" && req.Command == "" {
+		return fmt.Errorf("command is required for binary services (use --command or provide in JSON)")
 	}
 
 	svc, err := c.client.CreateService(req)
@@ -395,6 +406,9 @@ func (c *CreateCommand) buildRequest() (*ServiceRequest, error) {
 	if c.options.Command != "" {
 		req.Command = c.options.Command
 	}
+	if c.options.WorkDir != "" {
+		req.WorkDir = c.options.WorkDir
+	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled
 	}
@@ -434,7 +448,7 @@ func (c *UpdateCommand) Run() error {
 
 	// Check that at least one field is being updated
 	if req.Name == "" && req.Type == "" && req.Path == "" &&
-		req.Command == "" && req.Enabled == nil && req.Infrastructure == nil {
+		req.Command == "" && req.WorkDir == "" && req.Enabled == nil && req.Infrastructure == nil {
 		return fmt.Errorf("at least one field must be provided to update")
 	}
 
@@ -477,6 +491,9 @@ func (c *UpdateCommand) buildRequest() (*ServiceRequest, error) {
 	}
 	if c.options.Command != "" {
 		req.Command = c.options.Command
+	}
+	if c.options.WorkDir != "" {
+		req.WorkDir = c.options.WorkDir
 	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled

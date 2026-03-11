@@ -190,6 +190,7 @@ func runCreateCommand(args []string) error {
 	svcType := fs.String("type", "", "Service type: 'compose' or 'binary' (required)")
 	path := fs.String("path", "", "Path to compose file or binary (required)")
 	command := fs.String("command", "", "Command for binary services (optional)")
+	workDir := fs.String("workdir", "", "Working directory for binary services (optional)")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false (default: true)")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false (default: false)")
 
@@ -230,6 +231,7 @@ func runCreateCommand(args []string) error {
 		Type:     *svcType,
 		Path:     *path,
 		Command:  *command,
+		WorkDir:  *workDir,
 	}
 
 	if *enabled != "" {
@@ -259,6 +261,7 @@ func runUpdateCommand(args []string) error {
 	svcType := fs.String("type", "", "Service type: 'compose' or 'binary'")
 	path := fs.String("path", "", "Path to compose file or binary")
 	command := fs.String("command", "", "Command for binary services")
+	workDir := fs.String("workdir", "", "Working directory for binary services")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false")
 
@@ -300,6 +303,7 @@ func runUpdateCommand(args []string) error {
 		Type:     *svcType,
 		Path:     *path,
 		Command:  *command,
+		WorkDir:  *workDir,
 	}
 
 	if *enabled != "" {
@@ -582,8 +586,9 @@ Options:
   --id              Service ID (required)
   --name            Service name (required)
   --type            Service type: 'compose' or 'binary' (required)
-  --path            Path to compose file or binary (required)
-  --command         Command for binary services
+  --path            Path to compose file (required for compose)
+  --command         Command to run (required for binary)
+  --workdir         Working directory for binary services
   --enabled         Whether service is enabled: true/false (default: true)
   --infrastructure  Whether service is infrastructure: true/false (default: false)
 
@@ -591,9 +596,9 @@ Note: Individual flags override values from JSON file.
 
 Examples:
   reign create --id myservice --name "My Service" --type compose --path /opt/myservice/docker-compose.yml
-  reign create --id myapp --name "My App" --type binary --path /usr/local/bin/myapp --command "serve --port 8080"
+  reign create --id myapp --name "My App" --type binary --command "/usr/local/bin/myapp serve --port 8080" --workdir /opt/myapp
   reign create -f service.json
-  reign create -json '{"id":"myapp","name":"My App","type":"binary","path":"/usr/local/bin/myapp"}'
+  reign create -json '{"id":"myapp","name":"My App","type":"binary","command":"/usr/local/bin/myapp"}'
   cat service.json | reign create -f -
   reign show --json oldservice | reign create --id newservice -f -
 `)
@@ -615,6 +620,7 @@ Options:
   --type            Service type: 'compose' or 'binary'
   --path            Path to compose file or binary
   --command         Command for binary services
+  --workdir         Working directory for binary services
   --enabled         Whether service is enabled: true/false
   --infrastructure  Whether service is infrastructure: true/false
 

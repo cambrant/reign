@@ -13,8 +13,8 @@ Reign manages Docker Compose projects and native binaries on a single Linux serv
   (CLI client) ──────► │              Reign Server                │
                        │                                          │
   curl / HTTP ───────► │  REST API ◄──► Orchestrator ◄──► Docker  │
-                       │      │              │            Compose  │
-  systemd ───────────► │      └──────► SQLite Database             │
+                       │      │              │            Compose │
+  systemd ───────────► │      └──────► SQLite Database            │
   (runs reign serve)   └──────────────────────────────────────────┘
                                              │
                                ┌─────────────┼─────────────┐
