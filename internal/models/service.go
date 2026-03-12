@@ -34,6 +34,7 @@ type Service struct {
 	Path           string      `json:"path"`
 	Command        string      `json:"command,omitempty"`
 	WorkDir        string      `json:"work_dir,omitempty"`
+	EnvFile        string      `json:"env_file,omitempty"`
 	Enabled        bool        `json:"enabled"`
 	Infrastructure bool        `json:"infrastructure"`
 	CreatedAt      time.Time   `json:"created_at"`
@@ -70,10 +71,10 @@ type ServiceEvent struct {
 // Create inserts a new service into the database.
 func (s *Service) Create(db *sql.DB) error {
 	query := `
-		INSERT INTO services (id, name, type, path, command, work_dir, enabled, infrastructure, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		INSERT INTO services (id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 	`
-	_, err := db.Exec(query, s.ID, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.Enabled, s.Infrastructure)
+	_, err := db.Exec(query, s.ID, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.Enabled, s.Infrastructure)
 	if err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
 	}
@@ -99,10 +100,10 @@ func (s *Service) Create(db *sql.DB) error {
 func (s *Service) Update(db *sql.DB) error {
 	query := `
 		UPDATE services
-		SET name = ?, type = ?, path = ?, command = ?, work_dir = ?, enabled = ?, infrastructure = ?, updated_at = datetime('now')
+		SET name = ?, type = ?, path = ?, command = ?, work_dir = ?, env_file = ?, enabled = ?, infrastructure = ?, updated_at = datetime('now')
 		WHERE id = ?
 	`
-	result, err := db.Exec(query, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.Enabled, s.Infrastructure, s.ID)
+	result, err := db.Exec(query, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.Enabled, s.Infrastructure, s.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update service: %w", err)
 	}
@@ -121,15 +122,15 @@ func (s *Service) Update(db *sql.DB) error {
 // GetServiceByID retrieves a service by its ID.
 func GetServiceByID(db *sql.DB, id string) (*Service, error) {
 	query := `
-		SELECT id, name, type, path, command, work_dir, enabled, infrastructure, created_at, updated_at
+		SELECT id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at
 		FROM services
 		WHERE id = ?
 	`
 	var s Service
 	var createdAt, updatedAt string
-	var command, workDir sql.NullString
+	var command, workDir, envFile sql.NullString
 	err := db.QueryRow(query, id).Scan(
-		&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt,
+		&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -146,6 +147,9 @@ func GetServiceByID(db *sql.DB, id string) (*Service, error) {
 	if workDir.Valid {
 		s.WorkDir = workDir.String
 	}
+	if envFile.Valid {
+		s.EnvFile = envFile.String
+	}
 
 	return &s, nil
 }
@@ -153,7 +157,7 @@ func GetServiceByID(db *sql.DB, id string) (*Service, error) {
 // ListServices retrieves all services.
 func ListServices(db *sql.DB) ([]Service, error) {
 	query := `
-		SELECT id, name, type, path, command, work_dir, enabled, infrastructure, created_at, updated_at
+		SELECT id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at
 		FROM services
 		ORDER BY id
 	`
@@ -167,8 +171,8 @@ func ListServices(db *sql.DB) ([]Service, error) {
 	for rows.Next() {
 		var s Service
 		var createdAt, updatedAt string
-		var command, workDir sql.NullString
-		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
+		var command, workDir, envFile sql.NullString
+		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan service: %w", err)
 		}
 		s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
@@ -178,6 +182,9 @@ func ListServices(db *sql.DB) ([]Service, error) {
 		}
 		if workDir.Valid {
 			s.WorkDir = workDir.String
+		}
+		if envFile.Valid {
+			s.EnvFile = envFile.String
 		}
 		services = append(services, s)
 	}
@@ -189,7 +196,7 @@ func ListServices(db *sql.DB) ([]Service, error) {
 // Infrastructure services come first (alphabetically), then regular services (alphabetically).
 func ListEnabledServicesForStartup(db *sql.DB) ([]Service, error) {
 	query := `
-		SELECT id, name, type, path, command, work_dir, enabled, infrastructure, created_at, updated_at
+		SELECT id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at
 		FROM services
 		WHERE enabled = 1
 		ORDER BY infrastructure DESC, id ASC
@@ -204,8 +211,8 @@ func ListEnabledServicesForStartup(db *sql.DB) ([]Service, error) {
 	for rows.Next() {
 		var s Service
 		var createdAt, updatedAt string
-		var command, workDir sql.NullString
-		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
+		var command, workDir, envFile sql.NullString
+		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan service: %w", err)
 		}
 		s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
@@ -215,6 +222,9 @@ func ListEnabledServicesForStartup(db *sql.DB) ([]Service, error) {
 		}
 		if workDir.Valid {
 			s.WorkDir = workDir.String
+		}
+		if envFile.Valid {
+			s.EnvFile = envFile.String
 		}
 		services = append(services, s)
 	}

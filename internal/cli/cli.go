@@ -191,6 +191,7 @@ func runCreateCommand(args []string) error {
 	path := fs.String("path", "", "Path to compose file or binary (required)")
 	command := fs.String("command", "", "Command for binary services (optional)")
 	workDir := fs.String("workdir", "", "Working directory for binary services (optional)")
+	envFile := fs.String("envfile", "", "Path to env file for binary services (optional)")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false (default: true)")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false (default: false)")
 
@@ -232,6 +233,7 @@ func runCreateCommand(args []string) error {
 		Path:     *path,
 		Command:  *command,
 		WorkDir:  *workDir,
+		EnvFile:  *envFile,
 	}
 
 	if *enabled != "" {
@@ -262,6 +264,7 @@ func runUpdateCommand(args []string) error {
 	path := fs.String("path", "", "Path to compose file or binary")
 	command := fs.String("command", "", "Command for binary services")
 	workDir := fs.String("workdir", "", "Working directory for binary services")
+	envFile := fs.String("envfile", "", "Path to env file for binary services")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false")
 
@@ -304,6 +307,7 @@ func runUpdateCommand(args []string) error {
 		Path:     *path,
 		Command:  *command,
 		WorkDir:  *workDir,
+		EnvFile:  *envFile,
 	}
 
 	if *enabled != "" {

@@ -34,6 +34,7 @@ type ServiceRequest struct {
 	Path           string `json:"path"`
 	Command        string `json:"command,omitempty"`
 	WorkDir        string `json:"work_dir,omitempty"`
+	EnvFile        string `json:"env_file,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
@@ -223,6 +224,7 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		Path:           req.Path,
 		Command:        req.Command,
 		WorkDir:        req.WorkDir,
+		EnvFile:        req.EnvFile,
 		Enabled:        true,
 		Infrastructure: false,
 	}
@@ -288,6 +290,9 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 	}
 	if req.WorkDir != "" {
 		service.WorkDir = req.WorkDir
+	}
+	if req.EnvFile != "" {
+		service.EnvFile = req.EnvFile
 	}
 	if req.Enabled != nil {
 		service.Enabled = *req.Enabled

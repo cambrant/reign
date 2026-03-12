@@ -63,6 +63,15 @@ func (e *BinaryExecutor) Start(ctx context.Context, service *models.Service) err
 		cmd.Dir = service.Path
 	}
 
+	// Load environment variables from env file if specified
+	if service.EnvFile != "" {
+		envVars, err := loadEnvFile(service.EnvFile)
+		if err != nil {
+			return fmt.Errorf("failed to load env file for %s: %w", service.Name, err)
+		}
+		cmd.Env = append(os.Environ(), envVars...)
+	}
+
 	// Set up process group for clean termination
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
@@ -242,4 +251,31 @@ func parseArgs(command string) []string {
 	}
 
 	return args
+}
+
+// loadEnvFile reads a file of environment variable exports and returns them
+// as a slice of "KEY=VALUE" strings suitable for use with exec.Cmd.Env.
+// Lines beginning with '#' and blank lines are ignored. The 'export ' prefix
+// is stripped if present.
+func loadEnvFile(path string) ([]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var vars []string
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "export ")
+		if !strings.Contains(line, "=") {
+			continue
+		}
+		vars = append(vars, line)
+	}
+	return vars, scanner.Err()
 }

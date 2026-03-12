@@ -50,6 +50,7 @@ func createSchema(db *sql.DB) error {
 		path            TEXT NOT NULL,
 		command         TEXT,
 		work_dir        TEXT,
+		env_file        TEXT,
 		enabled         INTEGER NOT NULL DEFAULT 1,
 		infrastructure  INTEGER NOT NULL DEFAULT 0,
 		created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -88,6 +89,14 @@ func createSchema(db *sql.DB) error {
 	_, err = db.Exec("ALTER TABLE services ADD COLUMN work_dir TEXT")
 	if err != nil {
 		// Ignore "duplicate column" error — column already exists
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+
+	// Migrate existing databases: add env_file column if missing
+	_, err = db.Exec("ALTER TABLE services ADD COLUMN env_file TEXT")
+	if err != nil {
 		if !strings.Contains(err.Error(), "duplicate column") {
 			return err
 		}

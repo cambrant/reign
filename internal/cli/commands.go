@@ -103,6 +103,7 @@ func (c *ShowCommand) Run() error {
 			Path           string `json:"path"`
 			Command        string `json:"command,omitempty"`
 			WorkDir        string `json:"work_dir,omitempty"`
+			EnvFile        string `json:"env_file,omitempty"`
 			Enabled        bool   `json:"enabled"`
 			Infrastructure bool   `json:"infrastructure"`
 		}{
@@ -112,6 +113,7 @@ func (c *ShowCommand) Run() error {
 			Path:           resp.Path,
 			Command:        resp.Command,
 			WorkDir:        resp.WorkDir,
+			EnvFile:        resp.EnvFile,
 			Enabled:        resp.Enabled,
 			Infrastructure: resp.Infrastructure,
 		}
@@ -133,6 +135,9 @@ func (c *ShowCommand) Run() error {
 	}
 	if resp.WorkDir != "" {
 		fmt.Printf("  Work Dir:       %s\n", resp.WorkDir)
+	}
+	if resp.EnvFile != "" {
+		fmt.Printf("  Env File:       %s\n", resp.EnvFile)
 	}
 	fmt.Printf("  Enabled:        %v\n", resp.Enabled)
 	fmt.Printf("  Infrastructure: %v\n", resp.Infrastructure)
@@ -207,6 +212,7 @@ func (c *DumpCommand) Run() error {
 		Path           string `json:"path"`
 		Command        string `json:"command,omitempty"`
 		WorkDir        string `json:"work_dir,omitempty"`
+		EnvFile        string `json:"env_file,omitempty"`
 		Enabled        bool   `json:"enabled"`
 		Infrastructure bool   `json:"infrastructure"`
 	}{
@@ -216,6 +222,7 @@ func (c *DumpCommand) Run() error {
 		Path:           resp.Path,
 		Command:        resp.Command,
 		WorkDir:        resp.WorkDir,
+		EnvFile:        resp.EnvFile,
 		Enabled:        resp.Enabled,
 		Infrastructure: resp.Infrastructure,
 	}
@@ -324,6 +331,7 @@ type CreateUpdateOptions struct {
 	Path           string
 	Command        string
 	WorkDir        string
+	EnvFile        string
 	Enabled        *bool
 	Infrastructure *bool
 }
@@ -409,6 +417,9 @@ func (c *CreateCommand) buildRequest() (*ServiceRequest, error) {
 	if c.options.WorkDir != "" {
 		req.WorkDir = c.options.WorkDir
 	}
+	if c.options.EnvFile != "" {
+		req.EnvFile = c.options.EnvFile
+	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled
 	}
@@ -448,7 +459,7 @@ func (c *UpdateCommand) Run() error {
 
 	// Check that at least one field is being updated
 	if req.Name == "" && req.Type == "" && req.Path == "" &&
-		req.Command == "" && req.WorkDir == "" && req.Enabled == nil && req.Infrastructure == nil {
+		req.Command == "" && req.WorkDir == "" && req.EnvFile == "" && req.Enabled == nil && req.Infrastructure == nil {
 		return fmt.Errorf("at least one field must be provided to update")
 	}
 
@@ -494,6 +505,9 @@ func (c *UpdateCommand) buildRequest() (*ServiceRequest, error) {
 	}
 	if c.options.WorkDir != "" {
 		req.WorkDir = c.options.WorkDir
+	}
+	if c.options.EnvFile != "" {
+		req.EnvFile = c.options.EnvFile
 	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled
