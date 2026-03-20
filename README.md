@@ -8,34 +8,17 @@ A lightweight Docker Compose orchestrator for single-machine deployments.
 
 Reign manages Docker Compose projects and native binaries on a single Linux server. It replaces manual systemd service files with a unified CLI, REST API, and persistent state management.
 
-```
-  reign <cmd>          ┌──────────────────────────────────────────┐
-  (CLI client) ──────► │              Reign Server                │
-                       │                                          │
-  curl / HTTP ───────► │  REST API ◄──► Orchestrator ◄──► Docker  │
-                       │      │              │            Compose │
-  systemd ───────────► │      └──────► SQLite Database            │
-  (runs reign serve)   └──────────────────────────────────────────┘
-                                             │
-                               ┌─────────────┼─────────────┐
-                               ▼             ▼             ▼
-                         ┌─────────┐   ┌─────────┐   ┌─────────┐
-                         │ Service │   │ Service │   │ Service │
-                         │   #1    │   │   #2    │   │   #3    │
-                         └─────────┘   └─────────┘   └─────────┘
-```
-
 ## Features
 
-- **CLI** - Manage services from the command line
-- **REST API** - Full control via HTTP endpoints
-- **Docker Compose Management** - Start, stop, restart compose projects
-- **Native Binary Support** - Run standalone binaries with journald logging
-- **Infrastructure Priority** - Start databases and dependencies first
-- **Automatic Image Pulls** - Always pull latest images before starting
-- **Persistent State** - SQLite database tracks all services
-- **Event Logging** - Audit trail of all service operations
-- **Health Monitoring** - Report container status and statistics
+- **CLI**: Manage services from the command line
+- **REST API**: Full control via HTTP endpoints
+- **Docker Compose Management**: Start, stop, restart compose projects
+- **Native Binary Support**: Run standalone binaries with journald logging
+- **Infrastructure Priority**: Start databases and dependencies first
+- **Automatic Image Pulls**: Always pull latest images before starting
+- **Persistent State**: SQLite database tracks all services
+- **Event Logging**: Audit trail of all service operations
+- **Health Monitoring**: Report container status and statistics
 
 ---
 
@@ -422,9 +405,9 @@ curl http://localhost:7890/services
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) - System design and component details
-- [Data Model](docs/DATA_MODEL.md) - Database schema and data structures
-- [Roadmap](docs/ROADMAP.md) - Planned features and future direction
+- [Architecture](docs/ARCHITECTURE.md): System design and component details
+- [Data Model](docs/DATA_MODEL.md): Database schema and data structures
+- [Roadmap](docs/ROADMAP.md): Planned features and future direction
 
 ---
 
