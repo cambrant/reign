@@ -272,10 +272,19 @@ func loadEnvFile(path string) ([]string, error) {
 			continue
 		}
 		line = strings.TrimPrefix(line, "export ")
-		if !strings.Contains(line, "=") {
+		eqIdx := strings.Index(line, "=")
+		if eqIdx < 0 {
 			continue
 		}
-		vars = append(vars, line)
+		key := line[:eqIdx]
+		val := line[eqIdx+1:]
+		if len(val) >= 2 {
+			if (val[0] == '"' && val[len(val)-1] == '"') ||
+				(val[0] == '\'' && val[len(val)-1] == '\'') {
+				val = val[1 : len(val)-1]
+			}
+		}
+		vars = append(vars, key+"="+val)
 	}
 	return vars, scanner.Err()
 }
