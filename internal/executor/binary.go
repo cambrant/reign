@@ -56,11 +56,20 @@ func (e *BinaryExecutor) Start(ctx context.Context, service *models.Service) err
 
 	cmd := exec.Command("systemd-cat", cmdArgs...)
 
-	// Use WorkDir as the process working directory, falling back to Path
-	if service.WorkDir != "" {
-		cmd.Dir = service.WorkDir
-	} else if service.Path != "" {
-		cmd.Dir = service.Path
+	// Use WorkDir as the process working directory, falling back to Path.
+	// Validate it up front: a missing working directory makes the child's
+	// chdir fail, which the Go runtime surfaces as a misleading exec error
+	// against the systemd-cat path rather than the directory that is missing.
+	if dir := service.WorkDir; dir != "" {
+		if err := validateWorkDir(dir); err != nil {
+			return fmt.Errorf("work dir for service %s: %w", service.Name, err)
+		}
+		cmd.Dir = dir
+	} else if dir := service.Path; dir != "" {
+		if err := validateWorkDir(dir); err != nil {
+			return fmt.Errorf("path for service %s: %w", service.Name, err)
+		}
+		cmd.Dir = dir
 	}
 
 	// Load environment variables from env file if specified
@@ -251,6 +260,23 @@ func parseArgs(command string) []string {
 	}
 
 	return args
+}
+
+// validateWorkDir returns a clear error if dir does not exist or is not a
+// directory, so callers get an actionable message instead of the runtime's
+// misleading "fork/exec .../systemd-cat: no such file or directory".
+func validateWorkDir(dir string) error {
+	info, err := os.Stat(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("working directory %q does not exist", dir)
+		}
+		return fmt.Errorf("cannot access working directory %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("working directory %q is not a directory", dir)
+	}
+	return nil
 }
 
 // loadEnvFile reads a file of environment variable exports and returns them
