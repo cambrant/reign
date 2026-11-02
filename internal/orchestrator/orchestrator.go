@@ -27,7 +27,19 @@ type Orchestrator struct {
 	// stopChan signals background goroutines to stop
 	stopChan chan struct{}
 	wg       sync.WaitGroup
+
+	// pendingRestarts holds services with an automatic restart already scheduled,
+	// so repeated health checks don't stack up restarts for the same service.
+	pendingMu       sync.Mutex
+	pendingRestarts map[string]bool
 }
+
+const (
+	// maxRestartBackoff caps the exponential delay between automatic restarts.
+	maxRestartBackoff = 15 * time.Minute
+	// stableRunTime is how long a service must stay up before its restart count resets.
+	stableRunTime = 10 * time.Minute
+)
 
 // New creates a new Orchestrator.
 func New(db *sql.DB, cfg *config.Config) *Orchestrator {
@@ -38,6 +50,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		binaryExecutor:  executor.NewBinaryExecutor(),
 		startedAt:       time.Now(),
 		stopChan:        make(chan struct{}),
+		pendingRestarts: make(map[string]bool),
 	}
 }
 
@@ -218,8 +231,15 @@ func (o *Orchestrator) SyncServiceStates(ctx context.Context) error {
 	return nil
 }
 
-// StartService starts a specific service.
+// StartService starts a specific service. It counts as a manual start and
+// resets the service's automatic restart count.
 func (o *Orchestrator) StartService(ctx context.Context, id string) error {
+	return o.startService(ctx, id, false)
+}
+
+// startService starts a service. Automatic restarts (auto=true) keep the restart
+// count, so MaxRestarts can take effect; manual starts reset it.
+func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) error {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return fmt.Errorf("failed to get service: %w", err)
@@ -245,7 +265,9 @@ func (o *Orchestrator) StartService(ctx context.Context, id string) error {
 	models.LogEvent(o.db, id, "starting", "Service start initiated")
 
 	// Reset restart count on manual start
-	models.ResetRestartCount(o.db, id)
+	if !auto {
+		models.ResetRestartCount(o.db, id)
+	}
 
 	// Get executor
 	exec := o.getExecutor(service.Type)
@@ -646,57 +668,104 @@ func (o *Orchestrator) runHealthChecks(ctx context.Context) {
 
 	for _, service := range services {
 		state, err := models.GetServiceState(o.db, service.ID)
-		if err != nil {
+		if err != nil || state == nil {
 			continue
 		}
 
-		// Only check services that should be running
-		if state.Status != models.StatusRunning {
-			continue
-		}
-
-		// Get actual status from executor
-		exec := o.getExecutor(service.Type)
-		if exec == nil {
-			continue
-		}
-
-		actualStatus, err := exec.Status(ctx, &service)
-		if err != nil {
-			logger.Debug("Failed to get status for %s: %v", service.ID, err)
-			continue
-		}
-
-		// Handle status mismatch
-		if actualStatus != models.StatusRunning {
-			logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
-
-			// Update database to reflect actual status
-			if actualStatus == models.StatusStopped || actualStatus == models.StatusFailed {
-				if err := models.SetServiceFailed(o.db, service.ID, "service stopped unexpectedly"); err != nil {
-					logger.Error("Failed to update status for %s: %v", service.ID, err)
-				}
-				models.LogEvent(o.db, service.ID, "failed", "Service stopped unexpectedly")
-
-				// Attempt restart if enabled and under restart limit
-				if service.Enabled && state.RestartCount < o.config.MaxRestarts {
-					o.scheduleRestart(ctx, service.ID)
-				}
-			}
+		switch state.Status {
+		case models.StatusRunning:
+			o.checkRunningService(ctx, service, state)
+		case models.StatusFailed:
+			// A failed start (e.g. a transient docker error) is retried too,
+			// not only services that die while running.
+			o.maybeScheduleRestart(ctx, service, state)
 		}
 	}
 }
 
+// checkRunningService compares a service that should be running with reality.
+func (o *Orchestrator) checkRunningService(ctx context.Context, service models.Service, state *models.ServiceState) {
+	exec := o.getExecutor(service.Type)
+	if exec == nil {
+		return
+	}
+
+	actualStatus, err := exec.Status(ctx, &service)
+	if err != nil {
+		// Unknown state (e.g. docker daemon restarting): don't act on it.
+		logger.Debug("Failed to get status for %s: %v", service.ID, err)
+		return
+	}
+
+	switch actualStatus {
+	case models.StatusRunning:
+		// Forget old failures once the service has been stable for a while.
+		if state.RestartCount > 0 && state.StartedAt != nil && time.Since(*state.StartedAt) > stableRunTime {
+			if err := models.ResetRestartCount(o.db, service.ID); err != nil {
+				logger.Error("Failed to reset restart count for %s: %v", service.ID, err)
+			}
+		}
+	case models.StatusStopped, models.StatusFailed:
+		logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
+		if err := models.SetServiceFailed(o.db, service.ID, "service stopped unexpectedly"); err != nil {
+			logger.Error("Failed to update status for %s: %v", service.ID, err)
+		}
+		models.LogEvent(o.db, service.ID, "failed", "Service stopped unexpectedly")
+		o.maybeScheduleRestart(ctx, service, state)
+	default:
+		logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
+	}
+}
+
+// maybeScheduleRestart schedules an automatic restart if the service is enabled,
+// under its restart limit and doesn't already have one pending.
+func (o *Orchestrator) maybeScheduleRestart(ctx context.Context, service models.Service, state *models.ServiceState) {
+	if !service.Enabled {
+		return
+	}
+	if state.RestartCount >= o.config.MaxRestarts {
+		logger.Debug("Service %s reached max restarts (%d), not restarting", service.ID, o.config.MaxRestarts)
+		return
+	}
+
+	o.pendingMu.Lock()
+	if o.pendingRestarts[service.ID] {
+		o.pendingMu.Unlock()
+		return
+	}
+	o.pendingRestarts[service.ID] = true
+	o.pendingMu.Unlock()
+
+	o.scheduleRestart(ctx, service.ID, restartBackoff(o.config.RestartDelay, state.RestartCount))
+}
+
+// restartBackoff returns base * 2^attempts, capped at maxRestartBackoff.
+func restartBackoff(base time.Duration, attempts int) time.Duration {
+	d := base
+	for i := 0; i < attempts && d < maxRestartBackoff; i++ {
+		d *= 2
+	}
+	if d > maxRestartBackoff {
+		d = maxRestartBackoff
+	}
+	return d
+}
+
 // scheduleRestart schedules a delayed restart for a service.
-func (o *Orchestrator) scheduleRestart(ctx context.Context, id string) {
+func (o *Orchestrator) scheduleRestart(ctx context.Context, id string, delay time.Duration) {
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
+		defer func() {
+			o.pendingMu.Lock()
+			delete(o.pendingRestarts, id)
+			o.pendingMu.Unlock()
+		}()
 
-		logger.Info("Scheduling restart for %s in %s", id, o.config.RestartDelay)
+		logger.Info("Scheduling restart for %s in %s", id, delay)
 
 		select {
-		case <-time.After(o.config.RestartDelay):
+		case <-time.After(delay):
 			// Check if we should still restart
 			state, err := models.GetServiceState(o.db, id)
 			if err != nil || state == nil {
@@ -714,7 +783,7 @@ func (o *Orchestrator) scheduleRestart(ctx context.Context, id string) {
 			logger.Info("Restarting service %s (attempt %d)", id, state.RestartCount+1)
 			models.LogEvent(o.db, id, "restarting", fmt.Sprintf("Automatic restart attempt %d", state.RestartCount+1))
 
-			if err := o.StartService(ctx, id); err != nil {
+			if err := o.startService(ctx, id, true); err != nil {
 				logger.Error("Failed to restart %s: %v", id, err)
 			}
 
