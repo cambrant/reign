@@ -48,7 +48,7 @@ func TestDeleteCascadesToStateAndEvents(t *testing.T) {
 	}
 	for _, table := range []string{"service_state", "service_events"} {
 		var n int
-		db.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE service_id = 'app'").Scan(&n)
+		db.QueryRow("SELECT COUNT(*) FROM " + table + " WHERE service_id = 'app'").Scan(&n)
 		if n != 0 {
 			t.Errorf("%s still has %d rows for a deleted service", table, n)
 		}
