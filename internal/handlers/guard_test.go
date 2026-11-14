@@ -76,14 +76,17 @@ func TestGuardRejectsBrowserRequests(t *testing.T) {
 }
 
 func TestGuardRequiresAdminForChanges(t *testing.T) {
-	admins := access.NewAdminsWithLookup("reign", func(uid int, group string) ([]string, string, error) {
-		switch uid {
-		case 1000:
-			return []string{"1000", "990"}, "990", nil
-		case 1001:
-			return []string{"1001"}, "990", nil
-		}
-		return nil, "", errors.New("unknown user")
+	admins := access.NewAdminsWithLookup("reign", access.Lookup{
+		UserGroups: func(uid int) ([]string, error) {
+			switch uid {
+			case 1000:
+				return []string{"1000", "990"}, nil
+			case 1001:
+				return []string{"1001"}, nil
+			}
+			return nil, errors.New("unknown user")
+		},
+		GroupID: func(string) (string, error) { return "990", nil },
 	})
 	tests := []struct {
 		name     string

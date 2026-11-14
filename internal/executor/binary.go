@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/reign/internal/access"
 	"github.com/reign/internal/logger"
 	"github.com/reign/internal/models"
 )
@@ -48,8 +49,9 @@ func ResolveBinaryMode(mode string) string {
 type BinaryExecutor struct {
 	mode        string
 	run         CommandRunner
-	envDir      string        // systemd mode: where per-unit env files are written
-	stopTimeout time.Duration // systemd mode: TimeoutStopSec of the unit
+	envDir      string         // systemd mode: where per-unit env files are written
+	stopTimeout time.Duration  // systemd mode: TimeoutStopSec of the unit
+	admins      *access.Admins // may own env files besides root and reign's user
 
 	mu        sync.Mutex
 	processes map[string]*os.Process      // direct mode, keyed by service name
@@ -68,16 +70,20 @@ func NewBinaryExecutor() *BinaryExecutor {
 
 // BinaryOptions configures a BinaryExecutor.
 type BinaryOptions struct {
-	Mode        string        // BinaryModeSystemd or BinaryModeDirect (resolve auto first)
-	EnvDir      string        // systemd mode: directory for env files (default /run/reign)
-	StopTimeout time.Duration // systemd mode: how long systemd waits before SIGKILL (default 30s)
-	Run         CommandRunner // nil uses the real commands
+	Mode        string         // BinaryModeSystemd or BinaryModeDirect (resolve auto first)
+	EnvDir      string         // systemd mode: directory for env files (default /run/reign)
+	StopTimeout time.Duration  // systemd mode: how long systemd waits before SIGKILL (default 30s)
+	Run         CommandRunner  // nil uses the real commands
+	Admins      *access.Admins // users who may own env files; nil means root only
 }
 
 // NewBinaryExecutorWithOptions returns a binary executor for the given mode.
 // Direct mode returns the shared instance, since it owns process state.
 func NewBinaryExecutorWithOptions(opts BinaryOptions) *BinaryExecutor {
 	if opts.Mode != BinaryModeSystemd {
+		binaryExecutor.mu.Lock()
+		binaryExecutor.admins = opts.Admins
+		binaryExecutor.mu.Unlock()
 		return binaryExecutor
 	}
 	if opts.EnvDir == "" {
@@ -91,6 +97,7 @@ func NewBinaryExecutorWithOptions(opts BinaryOptions) *BinaryExecutor {
 		run:         opts.Run,
 		envDir:      opts.EnvDir,
 		stopTimeout: opts.StopTimeout,
+		admins:      opts.Admins,
 		processes:   make(map[string]*os.Process),
 	}
 }
@@ -128,7 +135,10 @@ func (e *BinaryExecutor) Start(ctx context.Context, service *models.Service) err
 
 	var envVars []string
 	if service.EnvFile != "" {
-		envVars, err = loadEnvFile(service.EnvFile)
+		e.mu.Lock()
+		admins := e.admins
+		e.mu.Unlock()
+		envVars, err = loadEnvFile(service.EnvFile, admins)
 		if err != nil {
 			return fmt.Errorf("failed to load env file for %s: %w", service.Name, err)
 		}
@@ -566,9 +576,9 @@ func validateWorkDir(dir string) error {
 // loadEnvFile reads a file of environment variable exports and returns them
 // as a slice of "KEY=VALUE" strings suitable for use with exec.Cmd.Env.
 // Lines beginning with '#' and blank lines are ignored. The 'export ' prefix
-// is stripped if present.
-func loadEnvFile(path string) ([]string, error) {
-	f, err := os.Open(path)
+// is stripped if present. The file must pass access.OpenEnvFile's checks.
+func loadEnvFile(path string, admins *access.Admins) ([]string, error) {
+	f, err := access.OpenEnvFile(path, admins)
 	if err != nil {
 		return nil, err
 	}

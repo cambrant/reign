@@ -310,6 +310,14 @@ sudo groupadd --system reign
 sudo usermod -aG reign tim   # takes effect at the next login
 ```
 
+Env files are loaded by root, so reign only accepts one that is an absolute
+path to a regular file (not a symlink), owned by root, by the user reign runs
+as or by an admin, and not writable by other users (`chmod 600` is safest).
+On create and update the calling user must also be able to read the file, so
+the API cannot be used to read files the caller has no access to. A service
+whose env file stops passing these checks fails to start with
+`failed to load env file`.
+
 If the group does not exist, only root can make changes. `"apiAuth": "none"`
 turns the UID check off (for development on macOS, where the UID cannot be
 determined); browser requests are still rejected.

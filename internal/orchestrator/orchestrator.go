@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/reign/internal/access"
 	"github.com/reign/internal/config"
 	"github.com/reign/internal/executor"
 	"github.com/reign/internal/logger"
@@ -74,6 +75,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 			Mode:        executor.ResolveBinaryMode(cfg.BinaryRunner),
 			EnvDir:      cfg.RuntimeDir,
 			StopTimeout: cfg.ShutdownTimeout,
+			Admins:      access.NewAdmins(cfg.AdminGroup),
 		}),
 		startedAt:       time.Now(),
 		stopChan:        make(chan struct{}),

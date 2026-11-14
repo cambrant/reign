@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/reign/internal/access"
 	"github.com/reign/internal/logger"
 	"github.com/reign/internal/models"
 	"github.com/reign/internal/orchestrator"
@@ -18,6 +19,10 @@ import (
 type ServicesHandler struct {
 	db           *sql.DB
 	orchestrator *orchestrator.Orchestrator
+	admins       *access.Admins // checked against env file owners
+
+	// peerUID finds the UID owning the client socket; tests replace it.
+	peerUID func(r *http.Request) (int, bool)
 }
 
 // NewServicesHandler creates a new ServicesHandler.
@@ -25,7 +30,24 @@ func NewServicesHandler(db *sql.DB, orch *orchestrator.Orchestrator) *ServicesHa
 	return &ServicesHandler{
 		db:           db,
 		orchestrator: orch,
+		peerUID:      requestPeerUID,
 	}
+}
+
+// WithAdmins sets who besides root and reign's own user may own env files.
+func (h *ServicesHandler) WithAdmins(a *access.Admins) *ServicesHandler {
+	h.admins = a
+	return h
+}
+
+// checkEnvFile validates an env file for a create or update request. Besides
+// the checks made when the service starts, the caller must be able to read
+// the file itself when reign can tell who the caller is.
+func (h *ServicesHandler) checkEnvFile(r *http.Request, path string) error {
+	if uid, ok := h.peerUID(r); ok {
+		return access.CheckEnvFileReadableBy(path, uid, h.admins)
+	}
+	return access.CheckEnvFile(path, h.admins)
 }
 
 // ServiceRequest represents a request to create or update a service.
@@ -246,6 +268,12 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "pull_policy must be 'missing', 'always' or 'never'")
 		return
 	}
+	if req.EnvFile != "" {
+		if err := h.checkEnvFile(r, req.EnvFile); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 
 	// Check if service already exists
 	existing, err := models.GetServiceByID(h.db, req.ID)
@@ -335,6 +363,10 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 		service.WorkDir = req.WorkDir
 	}
 	if req.EnvFile != "" {
+		if err := h.checkEnvFile(r, req.EnvFile); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		service.EnvFile = req.EnvFile
 	}
 	if req.PullPolicy != "" {

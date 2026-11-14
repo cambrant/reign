@@ -81,7 +81,7 @@ func main() {
 	mux := http.NewServeMux()
 
 	healthHandler := handlers.NewHealthHandler(db, orch)
-	servicesHandler := handlers.NewServicesHandler(db, orch)
+	servicesHandler := handlers.NewServicesHandler(db, orch).WithAdmins(access.NewAdmins(cfg.AdminGroup))
 
 	// Set version for health handler
 	handlers.SetVersion(version.Short())
