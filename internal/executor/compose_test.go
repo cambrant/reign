@@ -273,3 +273,35 @@ func TestComposeConfigCache(t *testing.T) {
 		t.Errorf("compose config ran %d times after an edit, want 2", configCalls)
 	}
 }
+
+func TestGetContainerStatsBatched(t *testing.T) {
+	statsCalls := 0
+	e := NewComposeExecutor(func(ctx context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
+		switch {
+		case strings.Join(args, " ") == "compose ps -q":
+			return []byte("aaa\nbbb\n"), []byte(versionWarning), nil
+		case args[0] == "stats":
+			statsCalls++
+			if got := args[len(args)-2:]; got[0] != "aaa" || got[1] != "bbb" {
+				t.Errorf("stats called for %v, want both containers in one call", got)
+			}
+			return []byte("aaa\tapp-web-1\t1.50%\t10MiB / 1GiB\t0.98%\t1kB / 2kB\t0B / 0B\n" +
+				"bbb\tapp-db-1\t0.20%\t200MiB / 1GiB\t19.53%\t3kB / 4kB\t1MB / 2MB\n"), nil, nil
+		}
+		return nil, nil, fmt.Errorf("unexpected %v", args)
+	})
+	svc := &models.Service{ID: "app", Path: "/srv/app"}
+
+	for i := 0; i < 3; i++ {
+		stats, err := e.GetContainerStats(context.Background(), svc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(stats) != 2 || stats[1].ContainerName != "app-db-1" || stats[1].MemoryUsage != "200MiB" || stats[0].CPUPercent != 1.5 {
+			t.Fatalf("stats = %+v", stats)
+		}
+	}
+	if statsCalls != 1 {
+		t.Errorf("docker stats ran %d times, want 1 (one call, then cached)", statsCalls)
+	}
+}

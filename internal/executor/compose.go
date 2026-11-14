@@ -46,6 +46,9 @@ type ComposeExecutor struct {
 	listMu        sync.Mutex
 	listAt        time.Time
 	listByProject map[string][]psEntry
+
+	statsMu    sync.Mutex
+	statsCache map[string]cachedStats // keyed by project directory
 }
 
 // containerListTTL is how long one container listing is reused. It is long
@@ -400,31 +403,50 @@ func (e *ComposeExecutor) FollowLogs(ctx context.Context, service *models.Servic
 	return ctx.Err()
 }
 
+// statsCacheTTL is how long container stats are reused, so a UI or API
+// client polling stats does not make dockerd sample them on every request.
+const statsCacheTTL = 5 * time.Second
+
+// cachedStats is one project's container stats and when they were sampled.
+type cachedStats struct {
+	at    time.Time
+	stats []ContainerStats
+}
+
 // GetContainerStats retrieves resource usage stats for Docker Compose containers.
+// All containers are sampled by one `docker stats --no-stream` call (each call
+// blocks for dockerd's two samples), and the result is cached for statsCacheTTL.
 func (e *ComposeExecutor) GetContainerStats(ctx context.Context, service *models.Service) ([]ContainerStats, error) {
+	e.statsMu.Lock()
+	if c, ok := e.statsCache[service.Path]; ok && time.Since(c.at) < statsCacheTTL {
+		e.statsMu.Unlock()
+		return c.stats, nil
+	}
+	e.statsMu.Unlock()
+
 	// Get list of container IDs (stdout only: stderr may carry compose warnings)
 	psOutput, psErr, err := e.runner()(ctx, service.Path, "docker", "compose", "ps", "-q")
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %s: %w", string(psErr), err)
 	}
-
-	containerIDs := strings.Split(strings.TrimSpace(string(psOutput)), "\n")
-	if len(containerIDs) == 0 || containerIDs[0] == "" {
+	containerIDs := strings.Fields(string(psOutput))
+	if len(containerIDs) == 0 {
 		return nil, nil
 	}
 
-	var stats []ContainerStats
-	for _, id := range containerIDs {
-		if id == "" {
-			continue
-		}
-		stat, err := getContainerStats(ctx, id)
-		if err != nil {
-			continue
-		}
-		stats = append(stats, stat)
+	args := append([]string{"stats", "--no-stream", "--format", statsFormat}, containerIDs...)
+	out, statsErr, err := e.runner()(ctx, service.Path, "docker", args...)
+	if err != nil {
+		return nil, fmt.Errorf("docker stats failed: %s: %w", bytes.TrimSpace(statsErr), err)
 	}
+	stats := parseStats(out)
 
+	e.statsMu.Lock()
+	if e.statsCache == nil {
+		e.statsCache = make(map[string]cachedStats)
+	}
+	e.statsCache[service.Path] = cachedStats{at: time.Now(), stats: stats}
+	e.statsMu.Unlock()
 	return stats, nil
 }
 
@@ -440,43 +462,30 @@ type ContainerStats struct {
 	BlockIO       string  `json:"block_io"`
 }
 
-func getContainerStats(ctx context.Context, containerID string) (ContainerStats, error) {
-	cmd := exec.CommandContext(ctx, "docker", "stats", "--no-stream", "--format",
-		"{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}",
-		containerID)
+// statsFormat prints one container per line for parseStats.
+const statsFormat = "{{.ID}}\t{{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.MemPerc}}\t{{.NetIO}}\t{{.BlockIO}}"
 
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	if err := cmd.Run(); err != nil {
-		return ContainerStats{}, err
+// parseStats parses `docker stats --format statsFormat` output, skipping malformed lines.
+func parseStats(out []byte) []ContainerStats {
+	var stats []ContainerStats
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		parts := strings.Split(strings.TrimSpace(line), "\t")
+		if len(parts) < 7 {
+			continue
+		}
+		memUsage, memLimit, _ := strings.Cut(parts[3], " / ")
+		stats = append(stats, ContainerStats{
+			ContainerID:   parts[0],
+			ContainerName: parts[1],
+			CPUPercent:    parsePercent(parts[2]),
+			MemoryUsage:   memUsage,
+			MemoryLimit:   memLimit,
+			MemoryPercent: parsePercent(parts[4]),
+			NetIO:         parts[5],
+			BlockIO:       parts[6],
+		})
 	}
-
-	line := strings.TrimSpace(out.String())
-	parts := strings.Split(line, "\t")
-	if len(parts) < 7 {
-		return ContainerStats{}, fmt.Errorf("unexpected stats format")
-	}
-
-	cpuPercent := parsePercent(parts[2])
-	memParts := strings.SplitN(parts[3], " / ", 2)
-	memUsage := ""
-	memLimit := ""
-	if len(memParts) == 2 {
-		memUsage = memParts[0]
-		memLimit = memParts[1]
-	}
-	memPercent := parsePercent(parts[4])
-
-	return ContainerStats{
-		ContainerID:   parts[0],
-		ContainerName: parts[1],
-		CPUPercent:    cpuPercent,
-		MemoryUsage:   memUsage,
-		MemoryLimit:   memLimit,
-		MemoryPercent: memPercent,
-		NetIO:         parts[5],
-		BlockIO:       parts[6],
-	}, nil
+	return stats
 }
 
 func parsePercent(s string) float64 {
