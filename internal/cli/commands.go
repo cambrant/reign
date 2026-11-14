@@ -184,7 +184,11 @@ func (c *ShowCommand) Run() error {
 			if e.Message != "" {
 				msg = " - " + e.Message
 			}
-			fmt.Printf("  [%s] %s%s\n", e.CreatedAt.Format("2006-01-02 15:04:05"), e.EventType, msg)
+			by := ""
+			if e.Requester != "" {
+				by = " (by " + e.Requester + ")"
+			}
+			fmt.Printf("  [%s] %s%s%s\n", e.CreatedAt.Format("2006-01-02 15:04:05"), e.EventType, msg, by)
 		}
 	}
 
@@ -799,12 +803,9 @@ func (c *EventsCommand) Run() error {
 				fmt.Println(data)
 				return
 			}
-			msg := e.Message
-			if len(msg) > 60 {
-				msg = msg[:57] + "..."
-			}
-			fmt.Printf("%s  %-20s  %-12s  %s\n",
-				e.CreatedAt.Format("2006-01-02 15:04:05"), e.ServiceName, e.EventType, msg)
+			fmt.Printf("%s  %-20s  %-12s  %-60s  %s\n",
+				e.CreatedAt.Format("2006-01-02 15:04:05"), e.ServiceName, e.EventType,
+				truncate(e.Message, 60), displayRequester(e.Requester))
 		})
 	}
 
@@ -828,19 +829,32 @@ func (c *EventsCommand) Run() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TIME\tSERVICE\tEVENT\tMESSAGE")
+	fmt.Fprintln(w, "TIME\tSERVICE\tEVENT\tMESSAGE\tREQUESTER")
 	for _, e := range resp.Events {
-		msg := e.Message
-		if len(msg) > 60 {
-			msg = msg[:57] + "..."
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			e.CreatedAt.Format("2006-01-02 15:04:05"), e.ServiceName, e.EventType, msg)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			e.CreatedAt.Format("2006-01-02 15:04:05"), e.ServiceName, e.EventType,
+			truncate(e.Message, 60), displayRequester(e.Requester))
 	}
 	w.Flush()
 
 	fmt.Printf("\nShowing %d event(s)\n", len(resp.Events))
 	return nil
+}
+
+// truncate shortens s to at most n characters, marking the cut with "...".
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-3] + "..."
+}
+
+// displayRequester renders an event's requester for the table, "-" if unknown.
+func displayRequester(r string) string {
+	if r == "" {
+		return "-"
+	}
+	return r
 }
 
 // DisableCommand handles the 'disable' subcommand.

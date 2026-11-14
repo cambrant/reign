@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/reign/internal/logger"
 	"github.com/reign/internal/models"
 	"github.com/reign/internal/orchestrator"
 )
@@ -125,6 +127,12 @@ func (h *ServicesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// requestContext returns the request's context carrying its requester, so
+// events logged by the orchestrator record who asked.
+func (h *ServicesHandler) requestContext(r *http.Request) context.Context {
+	return orchestrator.WithRequester(r.Context(), requesterFromRequest(r))
 }
 
 // listServices handles GET /services.
@@ -253,7 +261,7 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	models.LogEvent(h.db, req.ID, "created", "Service created")
+	models.LogEventBy(h.db, req.ID, "created", "Service created", requesterFromRequest(r))
 
 	// Return created service with state
 	created, err := models.GetServiceWithState(h.db, req.ID)
@@ -318,13 +326,13 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 		// Update state if disabling
 		if !*req.Enabled {
 			models.UpdateServiceStatus(h.db, id, models.StatusDisabled)
-			models.LogEvent(h.db, id, "disabled", "Service disabled")
+			models.LogEventBy(h.db, id, "disabled", "Service disabled", requesterFromRequest(r))
 		} else {
 			// If enabling, change status from disabled to stopped
 			state, _ := models.GetServiceState(h.db, id)
 			if state != nil && state.Status == models.StatusDisabled {
 				models.UpdateServiceStatus(h.db, id, models.StatusStopped)
-				models.LogEvent(h.db, id, "enabled", "Service enabled")
+				models.LogEventBy(h.db, id, "enabled", "Service enabled", requesterFromRequest(r))
 			}
 		}
 	}
@@ -337,7 +345,7 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	models.LogEvent(h.db, id, "updated", "Service configuration updated")
+	models.LogEventBy(h.db, id, "updated", "Service configuration updated", requesterFromRequest(r))
 
 	// Return updated service with state
 	updated, err := models.GetServiceWithState(h.db, id)
@@ -364,24 +372,26 @@ func (h *ServicesHandler) deleteService(w http.ResponseWriter, r *http.Request, 
 	// Stop service if running
 	state, _ := models.GetServiceState(h.db, id)
 	if state != nil && state.Status == models.StatusRunning {
-		if err := h.orchestrator.StopService(r.Context(), id); err != nil {
+		if err := h.orchestrator.StopService(h.requestContext(r), id); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to stop service before delete")
 			return
 		}
 	}
 
-	// Delete service
+	// Delete service. Its events are deleted with it, so the deletion is
+	// recorded in the server log instead.
 	if err := models.DeleteService(h.db, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete service")
 		return
 	}
+	logger.Info("Service deleted: %s (requested by %s)", id, requesterFromRequest(r))
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // startService handles POST /services/{id}/start.
 func (h *ServicesHandler) startService(w http.ResponseWriter, r *http.Request, id string) {
-	service, err := h.orchestrator.StartServiceAsync(id)
+	service, err := h.orchestrator.StartServiceAsync(h.requestContext(r), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -400,7 +410,7 @@ func (h *ServicesHandler) startService(w http.ResponseWriter, r *http.Request, i
 
 // stopService handles POST /services/{id}/stop.
 func (h *ServicesHandler) stopService(w http.ResponseWriter, r *http.Request, id string) {
-	service, err := h.orchestrator.StopServiceAsync(id)
+	service, err := h.orchestrator.StopServiceAsync(h.requestContext(r), id)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -416,7 +426,7 @@ func (h *ServicesHandler) stopService(w http.ResponseWriter, r *http.Request, id
 // restartService handles POST /services/{id}/restart[?pull=true].
 func (h *ServicesHandler) restartService(w http.ResponseWriter, r *http.Request, id string) {
 	pull := r.URL.Query().Get("pull") == "true"
-	service, err := h.orchestrator.RestartServiceAsync(id, pull)
+	service, err := h.orchestrator.RestartServiceAsync(h.requestContext(r), id, pull)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -436,7 +446,7 @@ func (h *ServicesHandler) restartService(w http.ResponseWriter, r *http.Request,
 // pullService handles POST /services/{id}/pull. It pulls images synchronously
 // and does not restart the service.
 func (h *ServicesHandler) pullService(w http.ResponseWriter, r *http.Request, id string) {
-	if err := h.orchestrator.PullService(r.Context(), id); err != nil {
+	if err := h.orchestrator.PullService(h.requestContext(r), id); err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
 			return

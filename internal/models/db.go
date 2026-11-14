@@ -74,6 +74,7 @@ func createSchema(db *sql.DB) error {
 		service_id      TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
 		event_type      TEXT NOT NULL,
 		message         TEXT,
+		requester       TEXT,
 		created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 	);
 
@@ -91,6 +92,7 @@ func createSchema(db *sql.DB) error {
 		"ALTER TABLE services ADD COLUMN work_dir TEXT",
 		"ALTER TABLE services ADD COLUMN env_file TEXT",
 		"ALTER TABLE services ADD COLUMN pull_policy TEXT",
+		"ALTER TABLE service_events ADD COLUMN requester TEXT",
 	}
 	for _, m := range migrations {
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {

@@ -17,6 +17,7 @@ import (
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
+	requester  string // sent as X-Reign-Requester so events record who asked
 }
 
 // NewClient creates a new API client.
@@ -26,6 +27,7 @@ func NewClient(baseURL string) *Client {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		requester: requesterIdentity(),
 	}
 }
 
@@ -56,6 +58,9 @@ func (c *Client) doRequest(method, path string, body interface{}) ([]byte, error
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
+	if c.requester != "" {
+		req.Header.Set(requesterHeader, c.requester)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -134,6 +139,7 @@ type ServiceEvent struct {
 	ServiceID string    `json:"service_id"`
 	EventType string    `json:"event_type"`
 	Message   string    `json:"message,omitempty"`
+	Requester string    `json:"requester,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -278,6 +284,7 @@ type EventLogEntry struct {
 	ServiceName string    `json:"service_name"`
 	EventType   string    `json:"event_type"`
 	Message     string    `json:"message,omitempty"`
+	Requester   string    `json:"requester,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -343,6 +350,9 @@ func (c *Client) streamSSE(ctx context.Context, path string, onData func(line st
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	if c.requester != "" {
+		req.Header.Set(requesterHeader, c.requester)
+	}
 
 	// Use a client without timeout for streaming
 	client := &http.Client{}

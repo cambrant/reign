@@ -57,6 +57,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 // StartupServices starts all enabled services in the correct order.
 // If syncFirst is true, it first probes actual service states and only starts services that aren't running.
 func (o *Orchestrator) StartupServices(ctx context.Context, syncFirst bool) error {
+	ctx = WithRequester(ctx, RequesterStartup)
 	if syncFirst {
 		if err := o.SyncServiceStates(ctx); err != nil {
 			logger.Warn("Failed to sync service states: %v", err)
@@ -129,6 +130,7 @@ func (o *Orchestrator) StartupServices(ctx context.Context, syncFirst bool) erro
 
 // ShutdownServices stops all running services (unless keepRunning is enabled).
 func (o *Orchestrator) ShutdownServices(ctx context.Context, keepRunning bool) error {
+	ctx = WithRequester(ctx, RequesterShutdown)
 	logger.Info("Shutting down orchestrator...")
 
 	// Signal background goroutines to stop
@@ -256,13 +258,13 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 		return fmt.Errorf("service is disabled: %s", id)
 	}
 
-	logger.Info("Starting service: %s", id)
+	logger.Info("Starting service: %s%s", id, byRequester(ctx))
 
 	// Update status to starting
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStarting); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
-	models.LogEvent(o.db, id, "starting", "Service start initiated")
+	o.logEvent(ctx, id, "starting", "Service start initiated")
 
 	// Reset restart count on manual start
 	if !auto {
@@ -281,7 +283,7 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 	// Start the service
 	if err := exec.Start(ctx, service); err != nil {
 		models.SetServiceFailed(o.db, id, err.Error())
-		models.LogEvent(o.db, id, "failed", err.Error())
+		o.logEvent(ctx, id, "failed", err.Error())
 		return fmt.Errorf("failed to start service: %w", err)
 	}
 
@@ -295,7 +297,7 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 	if err := models.SetServiceStarted(o.db, id, pid); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
-	models.LogEvent(o.db, id, "started", "Service started successfully")
+	o.logEvent(ctx, id, "started", "Service started successfully")
 	logger.Info("Service started: %s", id)
 
 	return nil
@@ -311,11 +313,13 @@ func (o *Orchestrator) StopService(ctx context.Context, id string) error {
 		return fmt.Errorf("service not found: %s", id)
 	}
 
+	logger.Info("Stopping service: %s%s", id, byRequester(ctx))
+
 	// Update status to stopping
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
-	models.LogEvent(o.db, id, "stopping", "Service stop initiated")
+	o.logEvent(ctx, id, "stopping", "Service stop initiated")
 
 	// Get executor
 	exec := o.getExecutor(service.Type)
@@ -325,7 +329,7 @@ func (o *Orchestrator) StopService(ctx context.Context, id string) error {
 
 	// Stop the service
 	if err := exec.Stop(ctx, service); err != nil {
-		models.LogEvent(o.db, id, "stop_failed", err.Error())
+		o.logEvent(ctx, id, "stop_failed", err.Error())
 		return fmt.Errorf("failed to stop service: %w", err)
 	}
 
@@ -333,7 +337,7 @@ func (o *Orchestrator) StopService(ctx context.Context, id string) error {
 	if err := models.SetServiceStopped(o.db, id); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
-	models.LogEvent(o.db, id, "stopped", "Service stopped successfully")
+	o.logEvent(ctx, id, "stopped", "Service stopped successfully")
 
 	return nil
 }
@@ -352,7 +356,8 @@ func (o *Orchestrator) RestartService(ctx context.Context, id string) error {
 
 // StartServiceAsync validates and initiates a service start in the background.
 // It returns the service with its current state immediately after setting the status to "starting".
-func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, error) {
+// ctx only supplies the requester (see WithRequester); the start itself outlives it.
+func (o *Orchestrator) StartServiceAsync(ctx context.Context, id string) (*models.ServiceWithState, error) {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service: %w", err)
@@ -373,7 +378,8 @@ func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, e
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStarting); err != nil {
 		return nil, fmt.Errorf("failed to update status: %w", err)
 	}
-	models.LogEvent(o.db, id, "starting", "Service start initiated")
+	o.logEvent(ctx, id, "starting", "Service start initiated")
+	logger.Info("Starting service: %s%s", id, byRequester(ctx))
 	models.ResetRestartCount(o.db, id)
 
 	// Build the response before launching the goroutine to avoid races
@@ -385,7 +391,7 @@ func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, e
 
 	// Run the actual start in the background
 	go func() {
-		ctx := context.Background()
+		ctx := context.WithoutCancel(ctx)
 		exec := o.getExecutor(service.Type)
 		if exec == nil {
 			models.SetServiceFailed(o.db, id, "unknown service type")
@@ -394,7 +400,7 @@ func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, e
 
 		if err := exec.Start(ctx, service); err != nil {
 			models.SetServiceFailed(o.db, id, err.Error())
-			models.LogEvent(o.db, id, "failed", err.Error())
+			o.logEvent(ctx, id, "failed", err.Error())
 			logger.Error("Failed to start service %s: %v", id, err)
 			return
 		}
@@ -408,7 +414,7 @@ func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, e
 			logger.Error("Failed to update status for %s: %v", id, err)
 			return
 		}
-		models.LogEvent(o.db, id, "started", "Service started successfully")
+		o.logEvent(ctx, id, "started", "Service started successfully")
 	}()
 
 	return result, nil
@@ -416,7 +422,8 @@ func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, e
 
 // StopServiceAsync validates and initiates a service stop in the background.
 // It returns the service with its current state immediately after setting the status to "stopping".
-func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, error) {
+// ctx only supplies the requester (see WithRequester); the stop itself outlives it.
+func (o *Orchestrator) StopServiceAsync(ctx context.Context, id string) (*models.ServiceWithState, error) {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service: %w", err)
@@ -434,7 +441,8 @@ func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, er
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
 		return nil, fmt.Errorf("failed to update status: %w", err)
 	}
-	models.LogEvent(o.db, id, "stopping", "Service stop initiated")
+	o.logEvent(ctx, id, "stopping", "Service stop initiated")
+	logger.Info("Stopping service: %s%s", id, byRequester(ctx))
 
 	// Build the response before launching the goroutine to avoid races
 	result := &models.ServiceWithState{Service: *service}
@@ -445,7 +453,7 @@ func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, er
 
 	// Run the actual stop in the background
 	go func() {
-		ctx := context.Background()
+		ctx := context.WithoutCancel(ctx)
 		exec := o.getExecutor(service.Type)
 		if exec == nil {
 			logger.Error("Unknown service type for %s: %s", id, service.Type)
@@ -453,7 +461,7 @@ func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, er
 		}
 
 		if err := exec.Stop(ctx, service); err != nil {
-			models.LogEvent(o.db, id, "stop_failed", err.Error())
+			o.logEvent(ctx, id, "stop_failed", err.Error())
 			logger.Error("Failed to stop service %s: %v", id, err)
 			return
 		}
@@ -462,7 +470,7 @@ func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, er
 			logger.Error("Failed to update status for %s: %v", id, err)
 			return
 		}
-		models.LogEvent(o.db, id, "stopped", "Service stopped successfully")
+		o.logEvent(ctx, id, "stopped", "Service stopped successfully")
 	}()
 
 	return result, nil
@@ -471,7 +479,8 @@ func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, er
 // RestartServiceAsync validates and initiates a service restart in the background.
 // With pull set, images are pulled first, while the service keeps running; a
 // failed pull aborts the restart. It returns the service with its current state.
-func (o *Orchestrator) RestartServiceAsync(id string, pull bool) (*models.ServiceWithState, error) {
+// ctx only supplies the requester (see WithRequester); the restart itself outlives it.
+func (o *Orchestrator) RestartServiceAsync(ctx context.Context, id string, pull bool) (*models.ServiceWithState, error) {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service: %w", err)
@@ -499,19 +508,20 @@ func (o *Orchestrator) RestartServiceAsync(id string, pull bool) (*models.Servic
 
 	if pull {
 		// Keep the current status while pulling: the service is still up.
-		models.LogEvent(o.db, id, "restarting", "Service restart with image pull initiated")
+		o.logEvent(ctx, id, "restarting", "Service restart with image pull initiated")
 	} else {
 		// Update status to stopping (first phase of restart)
 		if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
 			return nil, fmt.Errorf("failed to update status: %w", err)
 		}
-		models.LogEvent(o.db, id, "restarting", "Service restart initiated")
+		o.logEvent(ctx, id, "restarting", "Service restart initiated")
 		result.State.Status = models.StatusStopping
 	}
+	logger.Info("Restarting service: %s%s", id, byRequester(ctx))
 
 	// Run the actual restart in the background
 	go func() {
-		ctx := context.Background()
+		ctx := context.WithoutCancel(ctx)
 		if pull {
 			if err := o.pullImages(ctx, service); err != nil {
 				logger.Error("Not restarting %s: %v", id, err)
@@ -549,10 +559,10 @@ func (o *Orchestrator) PullService(ctx context.Context, id string) error {
 func (o *Orchestrator) pullImages(ctx context.Context, service *models.Service) error {
 	logger.Info("Pulling images for %s", service.ID)
 	if err := o.composeExecutor.Pull(ctx, service); err != nil {
-		models.LogEvent(o.db, service.ID, "pull_failed", err.Error())
+		o.logEvent(ctx, service.ID, "pull_failed", err.Error())
 		return fmt.Errorf("failed to pull images: %w", err)
 	}
-	models.LogEvent(o.db, service.ID, "pulled", "Images pulled successfully")
+	o.logEvent(ctx, service.ID, "pulled", "Images pulled successfully")
 	return nil
 }
 
@@ -681,6 +691,7 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context) {
 
 // runHealthChecks checks all running services and handles failures.
 func (o *Orchestrator) runHealthChecks(ctx context.Context) {
+	ctx = WithRequester(ctx, RequesterHealthCheck)
 	services, err := models.ListServices(o.db)
 	if err != nil {
 		logger.Error("Failed to list services for health check: %v", err)
@@ -731,7 +742,7 @@ func (o *Orchestrator) checkRunningService(ctx context.Context, service models.S
 		if err := models.SetServiceFailed(o.db, service.ID, "service stopped unexpectedly"); err != nil {
 			logger.Error("Failed to update status for %s: %v", service.ID, err)
 		}
-		models.LogEvent(o.db, service.ID, "failed", "Service stopped unexpectedly")
+		o.logEvent(ctx, service.ID, "failed", "Service stopped unexpectedly")
 		o.maybeScheduleRestart(ctx, service, state)
 	default:
 		logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
@@ -774,6 +785,7 @@ func restartBackoff(base time.Duration, attempts int) time.Duration {
 
 // scheduleRestart schedules a delayed restart for a service.
 func (o *Orchestrator) scheduleRestart(ctx context.Context, id string, delay time.Duration) {
+	ctx = WithRequester(ctx, RequesterAutoRestart)
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
@@ -802,7 +814,7 @@ func (o *Orchestrator) scheduleRestart(ctx context.Context, id string, delay tim
 			}
 
 			logger.Info("Restarting service %s (attempt %d)", id, state.RestartCount+1)
-			models.LogEvent(o.db, id, "restarting", fmt.Sprintf("Automatic restart attempt %d", state.RestartCount+1))
+			o.logEvent(ctx, id, "restarting", fmt.Sprintf("Automatic restart attempt %d", state.RestartCount+1))
 
 			if err := o.startService(ctx, id, true); err != nil {
 				logger.Error("Failed to restart %s: %v", id, err)
@@ -848,6 +860,21 @@ func (o *Orchestrator) waitForHealthy(ctx context.Context, service *models.Servi
 			}
 		}
 	}
+}
+
+// logEvent records an event attributed to the requester carried by ctx.
+func (o *Orchestrator) logEvent(ctx context.Context, id, eventType, message string) {
+	if err := models.LogEventBy(o.db, id, eventType, message, RequesterFrom(ctx)); err != nil {
+		logger.Error("Failed to log %s event for %s: %v", eventType, id, err)
+	}
+}
+
+// byRequester formats the requester for log lines, e.g. " (requested by tim@kraut)".
+func byRequester(ctx context.Context) string {
+	if r := RequesterFrom(ctx); r != "" {
+		return " (requested by " + r + ")"
+	}
+	return ""
 }
 
 // getExecutor returns the appropriate executor for a service type.

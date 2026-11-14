@@ -17,7 +17,7 @@ Reign manages Docker Compose projects and native binaries on a single Linux serv
 - **Infrastructure Priority**: Start databases and dependencies first
 - **Explicit Image Pulls**: Per-service pull policy (`missing` by default); upgrades via `reign pull` or `reign restart --pull`
 - **Persistent State**: SQLite database tracks all services
-- **Event Logging**: Audit trail of all service operations
+- **Event Logging**: Audit trail of all service operations, including who requested each one
 - **Health Monitoring**: Report container status and statistics
 
 ---
@@ -235,6 +235,22 @@ reign enable myservice        # allows starting again
 reign logs myservice          # last 100 lines
 reign logs -n 50 myservice    # last 50 lines
 ```
+
+### Events
+
+```bash
+reign events                  # last 50 events across all services
+reign events -f               # follow new events
+```
+
+Every event records its requester. The CLI sends its identity in the
+`X-Reign-Requester` header (`user@host tty [sudo] ppid=N`, with the invoking
+user when run through sudo). The server appends what it can verify: the remote
+address and, for loopback connections on Linux, the UID owning the client
+socket (looked up in `/proc/net/tcp`). Events reign triggers itself are
+attributed to `reign (startup)`, `reign (health check)`, `reign (auto-restart)`
+or `reign (shutdown)`. Start, stop, restart and delete requests are also logged
+with their requester in the server log (journald).
 
 ---
 

@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS service_events (
     service_id      TEXT NOT NULL REFERENCES services(id) ON DELETE CASCADE,
     event_type      TEXT NOT NULL,
     message         TEXT,
+    requester       TEXT,
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -97,6 +98,7 @@ CREATE INDEX idx_service_events_created_at ON service_events(created_at);
 | `service_id` | TEXT | Foreign key to services.id |
 | `event_type` | TEXT | Event type (started, stopped, failed, restarted, etc.) |
 | `message` | TEXT | Optional details about the event |
+| `requester` | TEXT | Who or what asked for it: the CLI identity plus verified peer info (e.g. `tim@kraut pts/0 ppid=4242 [uid=1000(tim) 127.0.0.1:54321]`), or `reign (startup)`, `reign (health check)`, `reign (auto-restart)`, `reign (shutdown)`; NULL if unknown |
 | `created_at` | TEXT | ISO 8601 timestamp of the event |
 
 ---
@@ -182,6 +184,7 @@ type ServiceEvent struct {
     ServiceID string    `json:"service_id"`
     EventType string    `json:"event_type"`
     Message   string    `json:"message,omitempty"`
+    Requester string    `json:"requester,omitempty"`
     CreatedAt time.Time `json:"created_at"`
 }
 ```
@@ -336,8 +339,11 @@ func ResetRestartCount(db *sql.DB, serviceID string) error
 ### Event Operations
 
 ```go
-// Log an event
+// Log an event (requester unknown)
 func LogEvent(db *sql.DB, serviceID, eventType, message string) error
+
+// Log an event with its requester
+func LogEventBy(db *sql.DB, serviceID, eventType, message, requester string) error
 
 // Get events for a service
 func GetServiceEvents(db *sql.DB, serviceID string, limit int) ([]ServiceEvent, error)

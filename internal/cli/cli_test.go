@@ -77,3 +77,41 @@ func TestDeleteConfirmation(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatRequester(t *testing.T) {
+	tests := []struct {
+		name                  string
+		user, sudo, host, tty string
+		want                  string
+	}{
+		{"plain user on a terminal", "tim", "", "kraut", "pts/0", "tim@kraut pts/0 ppid=42"},
+		{"sudo reports the invoking user", "root", "tim", "kraut", "pts/1", "tim@kraut pts/1 sudo ppid=42"},
+		{"no terminal (cron, script)", "deploy", "", "kraut", "", "deploy@kraut ppid=42"},
+		{"unknown user", "", "", "", "", "unknown ppid=42"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatRequester(tt.user, tt.sudo, tt.host, tt.tty, 42); got != tt.want {
+				t.Errorf("formatRequester = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientSendsRequester(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get(requesterHeader)
+		w.Write([]byte(`{"id":"app","state":{"status":"stopping"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	c.requester = "tim@kraut pts/0 ppid=42"
+	if _, err := c.RestartService("app", false); err != nil {
+		t.Fatal(err)
+	}
+	if got != "tim@kraut pts/0 ppid=42" {
+		t.Errorf("X-Reign-Requester = %q", got)
+	}
+}

@@ -87,7 +87,7 @@ func TestRestartWithPull(t *testing.T) {
 			o, rec := newRecordingOrchestrator(t, models.StatusRunning)
 			rec.pullErr = tt.pullErr
 
-			if _, err := o.RestartServiceAsync("app", true); err != nil {
+			if _, err := o.RestartServiceAsync(context.Background(), "app", true); err != nil {
 				t.Fatalf("RestartServiceAsync: %v", err)
 			}
 			if !waitForCommand(rec, "compose pull") {
@@ -123,5 +123,45 @@ func TestPullServiceRejectsBinary(t *testing.T) {
 	}
 	if err := o.PullService(context.Background(), "bin"); err == nil || !strings.Contains(err.Error(), "only supported") {
 		t.Fatalf("PullService(binary) error = %v, want 'only supported'", err)
+	}
+}
+
+func TestEventsRecordRequester(t *testing.T) {
+	o, _, db := newTestOrchestrator(t, models.StatusStopped, 0)
+	ctx := WithRequester(context.Background(), "tim@kraut pts/0 [127.0.0.1:5555]")
+
+	if err := o.StartService(ctx, "app"); err != nil {
+		t.Fatalf("StartService: %v", err)
+	}
+	events, err := models.GetServiceEvents(db, "app", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 {
+		t.Fatal("no events logged")
+	}
+	for _, e := range events {
+		if e.Requester != "tim@kraut pts/0 [127.0.0.1:5555]" {
+			t.Errorf("event %s requester = %q", e.EventType, e.Requester)
+		}
+	}
+}
+
+func TestHealthCheckEventsAttributedToReign(t *testing.T) {
+	o, fake, db := newTestOrchestrator(t, models.StatusRunning, 0)
+	fake.running = false
+
+	healthCheck(o)
+
+	events, err := models.GetServiceEvents(db, "app", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]string{}
+	for _, e := range events {
+		seen[e.EventType+"/"+e.Requester] = e.Message
+	}
+	if _, ok := seen["restarting/"+RequesterAutoRestart]; !ok {
+		t.Errorf("no restarting event attributed to %q; events: %v", RequesterAutoRestart, seen)
 	}
 }
