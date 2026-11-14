@@ -732,23 +732,69 @@ func (o *Orchestrator) StartHealthChecker(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				o.runHealthChecks(ctx)
+				// Spread the checks over most of the interval instead of
+				// checking every service in one burst at each tick.
+				o.checkServices(ctx, o.config.HealthCheckInterval*9/10)
 			}
 		}
 	}()
 }
 
-// runHealthChecks checks all running services and handles failures.
+// runHealthChecks checks all services at once and returns when done.
 func (o *Orchestrator) runHealthChecks(ctx context.Context) {
+	o.checkServices(ctx, 0)
+}
+
+const (
+	// healthCheckWorkers bounds concurrent checks, so one hung docker or
+	// systemctl call does not hold up the others, without bursting dockerd.
+	healthCheckWorkers = 3
+	// healthCheckTimeout bounds a single service's check.
+	healthCheckTimeout = time.Minute
+)
+
+// checkServices checks every service, starting the checks evenly over spread
+// (0 starts them all at once), at most healthCheckWorkers at a time. It
+// returns when all checks are done.
+func (o *Orchestrator) checkServices(ctx context.Context, spread time.Duration) {
 	ctx = WithRequester(ctx, RequesterHealthCheck)
 	services, err := models.ListServices(o.db)
 	if err != nil {
 		logger.Error("Failed to list services for health check: %v", err)
 		return
 	}
+	if len(services) == 0 {
+		return
+	}
 
-	for _, service := range services {
-		o.checkService(ctx, service)
+	step := spread / time.Duration(len(services))
+	sem := make(chan struct{}, healthCheckWorkers)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+
+	for i, service := range services {
+		if i > 0 && step > 0 {
+			select {
+			case <-time.After(step):
+			case <-ctx.Done():
+				return
+			case <-o.stopChan:
+				return
+			}
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			return
+		}
+		wg.Add(1)
+		go func(service models.Service) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			checkCtx, cancel := context.WithTimeout(ctx, healthCheckTimeout)
+			defer cancel()
+			o.checkService(checkCtx, service)
+		}(service)
 	}
 }
 
@@ -991,7 +1037,9 @@ func restartBackoff(base time.Duration, attempts int) time.Duration {
 
 // scheduleRestart schedules a delayed restart for a service.
 func (o *Orchestrator) scheduleRestart(ctx context.Context, id string, delay time.Duration) {
-	ctx = WithRequester(ctx, RequesterAutoRestart)
+	// The restart outlives the health check that scheduled it (and its
+	// timeout); shutdown is signalled through stopChan.
+	ctx = WithRequester(context.WithoutCancel(ctx), RequesterAutoRestart)
 	o.wg.Add(1)
 	go func() {
 		defer o.wg.Done()
@@ -1027,8 +1075,6 @@ func (o *Orchestrator) scheduleRestart(ctx context.Context, id string, delay tim
 			}
 
 		case <-o.stopChan:
-			return
-		case <-ctx.Done():
 			return
 		}
 	}()

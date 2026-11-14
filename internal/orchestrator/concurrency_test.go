@@ -96,3 +96,44 @@ func TestDisabledRunningServiceStopsAsDisabled(t *testing.T) {
 		t.Errorf("disabled service was restarted")
 	}
 }
+
+func TestCheckServicesSpreadsChecks(t *testing.T) {
+	o, _, db := newTestOrchestrator(t, models.StatusStopped, 0)
+	for _, id := range []string{"b", "c", "d"} {
+		s := &models.Service{ID: id, Name: id, Type: models.ServiceTypeCompose, Path: "/srv/" + id, Enabled: true}
+		if err := s.Create(db); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := time.Now()
+	o.checkServices(context.Background(), 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	// 4 services over 200ms: checks start 50ms apart, the last at ~150ms.
+	if elapsed < 140*time.Millisecond {
+		t.Errorf("checks finished after %s, want them spread over ~150ms", elapsed)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("checks took %s", elapsed)
+	}
+}
+
+func TestCheckServicesStopsOnShutdown(t *testing.T) {
+	o, _, db := newTestOrchestrator(t, models.StatusStopped, 0)
+	second := &models.Service{ID: "b", Name: "b", Type: models.ServiceTypeCompose, Path: "/srv/b", Enabled: true}
+	if err := second.Create(db); err != nil {
+		t.Fatal(err)
+	}
+	close(o.stopChan)
+	done := make(chan struct{})
+	go func() {
+		o.checkServices(context.Background(), time.Hour)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("checkServices did not return after shutdown")
+	}
+}
