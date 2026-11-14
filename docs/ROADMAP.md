@@ -13,7 +13,7 @@ Initial release with core functionality:
 - [x] SQLite persistent storage
 - [x] REST API for service control
 - [x] Infrastructure service priority startup
-- [x] Automatic image pulling before start
+- [x] Per-service image pull policy (`missing`, `always`, `never`); explicit `reign pull`
 - [x] Health check reporting
 - [x] Event logging/audit trail
 - [x] Graceful shutdown handling

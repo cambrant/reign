@@ -200,3 +200,30 @@ func TestComposeStartErrorIncludesStderr(t *testing.T) {
 		t.Fatalf("expected start error carrying stderr, got %v", err)
 	}
 }
+
+func TestComposeStartPullPolicy(t *testing.T) {
+	tests := []struct {
+		policy models.PullPolicy
+		want   string
+	}{
+		{"", "compose up -d"},
+		{models.PullMissing, "compose up -d"},
+		{models.PullAlways, "compose up -d --pull always"},
+		{models.PullNever, "compose up -d --pull never"},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.policy), func(t *testing.T) {
+			var got []string
+			e := NewComposeExecutor(func(ctx context.Context, dir, name string, args ...string) ([]byte, []byte, error) {
+				got = append(got, strings.Join(args, " "))
+				return nil, nil, nil
+			})
+			if err := e.Start(context.Background(), &models.Service{ID: "app", Path: "/srv/app", PullPolicy: tt.policy}); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			if len(got) != 1 || got[0] != tt.want {
+				t.Errorf("commands = %q, want only %q", got, tt.want)
+			}
+		})
+	}
+}

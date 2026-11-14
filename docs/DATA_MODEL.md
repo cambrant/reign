@@ -20,6 +20,10 @@ CREATE TABLE IF NOT EXISTS services (
     name            TEXT NOT NULL,
     type            TEXT NOT NULL CHECK (type IN ('compose', 'binary')),
     path            TEXT NOT NULL,
+    command         TEXT,
+    work_dir        TEXT,
+    env_file        TEXT,
+    pull_policy     TEXT,
     enabled         INTEGER NOT NULL DEFAULT 1,
     infrastructure  INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -33,6 +37,10 @@ CREATE TABLE IF NOT EXISTS services (
 | `name` | TEXT | Human-readable display name |
 | `type` | TEXT | Service type: "compose" or "binary" |
 | `path` | TEXT | Filesystem path to compose file directory or binary |
+| `command` | TEXT | Command line for binary services |
+| `work_dir` | TEXT | Working directory for binary services |
+| `env_file` | TEXT | Env file loaded for binary services |
+| `pull_policy` | TEXT | Compose image pull policy on start: `missing` (default, also when NULL), `always`, `never` |
 | `enabled` | INTEGER | 1 if service should auto-start, 0 if disabled |
 | `infrastructure` | INTEGER | 1 if this is an infrastructure service (starts first) |
 | `created_at` | TEXT | ISO 8601 timestamp of creation |
@@ -195,7 +203,8 @@ Standard event types for the audit log:
 | `stopped` | Service successfully stopped |
 | `failed` | Service failed to start or crashed |
 | `restarted` | Automatic restart triggered |
-| `pulled` | Docker images were pulled |
+| `pulled` | Docker images were pulled (`reign pull` / `restart --pull`) |
+| `pull_failed` | An explicit image pull failed |
 
 ---
 

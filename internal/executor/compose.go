@@ -56,8 +56,22 @@ func (e *ComposeExecutor) compose(ctx context.Context, dir string, args ...strin
 }
 
 // Start starts a Docker Compose service.
+//
+// Images are pulled according to the service's pull policy. The default
+// (missing) is what `docker compose up` does by itself, so no flag is passed;
+// floating tags are never silently refreshed by a restart.
 func (e *ComposeExecutor) Start(ctx context.Context, service *models.Service) error {
-	return e.compose(ctx, service.Path, "up", "-d")
+	return e.compose(ctx, service.Path, upArgs(service.PullPolicy)...)
+}
+
+// upArgs returns the `docker compose up` arguments for a pull policy.
+func upArgs(policy models.PullPolicy) []string {
+	args := []string{"up", "-d"}
+	switch policy {
+	case models.PullAlways, models.PullNever:
+		args = append(args, "--pull", string(policy))
+	}
+	return args
 }
 
 // Stop stops a Docker Compose service.
@@ -208,7 +222,8 @@ func (e *ComposeExecutor) Status(ctx context.Context, service *models.Service) (
 	return evaluateStatus(cfg.Services, containers), nil
 }
 
-// Pull pulls the latest images for a Docker Compose service.
+// Pull pulls the latest images for a Docker Compose service. It is only run
+// on request (reign pull, reign restart --pull), never as part of a start.
 func (e *ComposeExecutor) Pull(ctx context.Context, service *models.Service) error {
 	return e.compose(ctx, service.Path, "pull")
 }

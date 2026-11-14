@@ -276,18 +276,8 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 		return fmt.Errorf("unknown service type: %s", service.Type)
 	}
 
-	// Pull images first (for compose services)
-	if service.Type == models.ServiceTypeCompose {
-		logger.Debug("Pulling images for %s", id)
-		if err := exec.Pull(ctx, service); err != nil {
-			logger.Warn("Failed to pull images for %s: %v", id, err)
-			models.LogEvent(o.db, id, "pull_failed", err.Error())
-			// Continue anyway - might work with cached images
-		} else {
-			models.LogEvent(o.db, id, "pulled", "Images pulled successfully")
-		}
-	}
-
+	// Images are not pulled here: compose's pull policy handles missing images,
+	// and upgrades are explicit (reign pull / reign restart --pull).
 	// Start the service
 	if err := exec.Start(ctx, service); err != nil {
 		models.SetServiceFailed(o.db, id, err.Error())
@@ -402,16 +392,6 @@ func (o *Orchestrator) StartServiceAsync(id string) (*models.ServiceWithState, e
 			return
 		}
 
-		if service.Type == models.ServiceTypeCompose {
-			logger.Debug("Pulling images for %s", id)
-			if err := exec.Pull(ctx, service); err != nil {
-				logger.Warn("Failed to pull images for %s: %v", id, err)
-				models.LogEvent(o.db, id, "pull_failed", err.Error())
-			} else {
-				models.LogEvent(o.db, id, "pulled", "Images pulled successfully")
-			}
-		}
-
 		if err := exec.Start(ctx, service); err != nil {
 			models.SetServiceFailed(o.db, id, err.Error())
 			models.LogEvent(o.db, id, "failed", err.Error())
@@ -489,8 +469,9 @@ func (o *Orchestrator) StopServiceAsync(id string) (*models.ServiceWithState, er
 }
 
 // RestartServiceAsync validates and initiates a service restart in the background.
-// It returns the service with its current state immediately after setting the status to "stopping".
-func (o *Orchestrator) RestartServiceAsync(id string) (*models.ServiceWithState, error) {
+// With pull set, images are pulled first, while the service keeps running; a
+// failed pull aborts the restart. It returns the service with its current state.
+func (o *Orchestrator) RestartServiceAsync(id string, pull bool) (*models.ServiceWithState, error) {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service: %w", err)
@@ -506,23 +487,37 @@ func (o *Orchestrator) RestartServiceAsync(id string) (*models.ServiceWithState,
 	if state != nil && state.Status == models.StatusDisabled {
 		return nil, fmt.Errorf("service is disabled: %s", id)
 	}
-
-	// Update status to stopping (first phase of restart)
-	if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
-		return nil, fmt.Errorf("failed to update status: %w", err)
+	if pull && service.Type != models.ServiceTypeCompose {
+		return nil, fmt.Errorf("pull is only supported for compose services: %s", id)
 	}
-	models.LogEvent(o.db, id, "restarting", "Service restart initiated")
 
 	// Build the response before launching the goroutine to avoid races
 	result := &models.ServiceWithState{Service: *service}
 	if state != nil {
 		result.State = *state
 	}
-	result.State.Status = models.StatusStopping
+
+	if pull {
+		// Keep the current status while pulling: the service is still up.
+		models.LogEvent(o.db, id, "restarting", "Service restart with image pull initiated")
+	} else {
+		// Update status to stopping (first phase of restart)
+		if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
+			return nil, fmt.Errorf("failed to update status: %w", err)
+		}
+		models.LogEvent(o.db, id, "restarting", "Service restart initiated")
+		result.State.Status = models.StatusStopping
+	}
 
 	// Run the actual restart in the background
 	go func() {
 		ctx := context.Background()
+		if pull {
+			if err := o.pullImages(ctx, service); err != nil {
+				logger.Error("Not restarting %s: %v", id, err)
+				return
+			}
+		}
 		if err := o.StopService(ctx, id); err != nil {
 			logger.Warn("Error stopping service %s during restart: %v", id, err)
 		}
@@ -533,6 +528,32 @@ func (o *Orchestrator) RestartServiceAsync(id string) (*models.ServiceWithState,
 	}()
 
 	return result, nil
+}
+
+// PullService pulls the images of a compose service without restarting it.
+func (o *Orchestrator) PullService(ctx context.Context, id string) error {
+	service, err := models.GetServiceByID(o.db, id)
+	if err != nil {
+		return fmt.Errorf("failed to get service: %w", err)
+	}
+	if service == nil {
+		return fmt.Errorf("service not found: %s", id)
+	}
+	if service.Type != models.ServiceTypeCompose {
+		return fmt.Errorf("pull is only supported for compose services: %s", id)
+	}
+	return o.pullImages(ctx, service)
+}
+
+// pullImages pulls a compose service's images and records the outcome as an event.
+func (o *Orchestrator) pullImages(ctx context.Context, service *models.Service) error {
+	logger.Info("Pulling images for %s", service.ID)
+	if err := o.composeExecutor.Pull(ctx, service); err != nil {
+		models.LogEvent(o.db, service.ID, "pull_failed", err.Error())
+		return fmt.Errorf("failed to pull images: %w", err)
+	}
+	models.LogEvent(o.db, service.ID, "pulled", "Images pulled successfully")
+	return nil
 }
 
 // GetServiceStatus returns the current status of a service by querying the executor.

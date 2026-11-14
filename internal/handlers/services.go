@@ -35,6 +35,7 @@ type ServiceRequest struct {
 	Command        string `json:"command,omitempty"`
 	WorkDir        string `json:"work_dir,omitempty"`
 	EnvFile        string `json:"env_file,omitempty"`
+	PullPolicy     string `json:"pull_policy,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
@@ -103,6 +104,12 @@ func (h *ServicesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.restartService(w, r, serviceID)
+	case "pull":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.pullService(w, r, serviceID)
 	case "logs":
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -204,6 +211,10 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "command is required for binary services")
 		return
 	}
+	if !models.ValidPullPolicy(models.PullPolicy(req.PullPolicy)) {
+		writeError(w, http.StatusBadRequest, "pull_policy must be 'missing', 'always' or 'never'")
+		return
+	}
 
 	// Check if service already exists
 	existing, err := models.GetServiceByID(h.db, req.ID)
@@ -225,6 +236,7 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		Command:        req.Command,
 		WorkDir:        req.WorkDir,
 		EnvFile:        req.EnvFile,
+		PullPolicy:     models.PullPolicy(req.PullPolicy),
 		Enabled:        true,
 		Infrastructure: false,
 	}
@@ -293,6 +305,13 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 	}
 	if req.EnvFile != "" {
 		service.EnvFile = req.EnvFile
+	}
+	if req.PullPolicy != "" {
+		if !models.ValidPullPolicy(models.PullPolicy(req.PullPolicy)) {
+			writeError(w, http.StatusBadRequest, "pull_policy must be 'missing', 'always' or 'never'")
+			return
+		}
+		service.PullPolicy = models.PullPolicy(req.PullPolicy)
 	}
 	if req.Enabled != nil {
 		service.Enabled = *req.Enabled
@@ -394,12 +413,17 @@ func (h *ServicesHandler) stopService(w http.ResponseWriter, r *http.Request, id
 	writeJSON(w, http.StatusAccepted, service)
 }
 
-// restartService handles POST /services/{id}/restart.
+// restartService handles POST /services/{id}/restart[?pull=true].
 func (h *ServicesHandler) restartService(w http.ResponseWriter, r *http.Request, id string) {
-	service, err := h.orchestrator.RestartServiceAsync(id)
+	pull := r.URL.Query().Get("pull") == "true"
+	service, err := h.orchestrator.RestartServiceAsync(id, pull)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "only supported") || strings.Contains(err.Error(), "disabled") {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -407,6 +431,25 @@ func (h *ServicesHandler) restartService(w http.ResponseWriter, r *http.Request,
 	}
 
 	writeJSON(w, http.StatusAccepted, service)
+}
+
+// pullService handles POST /services/{id}/pull. It pulls images synchronously
+// and does not restart the service.
+func (h *ServicesHandler) pullService(w http.ResponseWriter, r *http.Request, id string) {
+	if err := h.orchestrator.PullService(r.Context(), id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "only supported") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "pulled"})
 }
 
 // getServiceLogs handles GET /services/{id}/logs.

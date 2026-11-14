@@ -15,7 +15,7 @@ Reign manages Docker Compose projects and native binaries on a single Linux serv
 - **Docker Compose Management**: Start, stop, restart compose projects
 - **Native Binary Support**: Run standalone binaries with journald logging
 - **Infrastructure Priority**: Start databases and dependencies first
-- **Automatic Image Pulls**: Always pull latest images before starting
+- **Explicit Image Pulls**: Per-service pull policy (`missing` by default); upgrades via `reign pull` or `reign restart --pull`
 - **Persistent State**: SQLite database tracks all services
 - **Event Logging**: Audit trail of all service operations
 - **Health Monitoring**: Report container status and statistics
@@ -106,7 +106,8 @@ The `reign` binary acts as both the server and the CLI client. When invoked with
 | `delete` | `rm`, `remove` | Delete a service |
 | `start` | | Start a service |
 | `stop` | | Stop a service |
-| `restart` | | Restart a service |
+| `restart` | | Restart a service (`--pull` pulls images first) |
+| `pull` | | Pull a compose service's images without restarting |
 | `logs` | | View service logs |
 | `enable` | | Enable a service |
 | `disable` | | Disable a service |
@@ -163,6 +164,9 @@ reign show --json oldservice | jq '.id = "newservice"' | reign create -f -
 | `--type` | `compose` or `binary` (required) |
 | `--path` | Path to compose dir or binary (required) |
 | `--command` | Command / arguments for binary services |
+| `--workdir` | Working directory for binary services |
+| `--envfile` | Env file for binary services |
+| `--pull` | Compose pull policy: `missing` (default), `always`, `never` |
 | `--enabled` | `true` / `false` (default: `true`) |
 | `--infrastructure` | `true` / `false` (default: `false`) |
 
@@ -196,6 +200,26 @@ fails with an error instead of reading a confirmation from the pipe.
 reign start myservice
 reign stop myservice
 reign restart myservice
+reign restart --pull myservice   # pull new images first, then restart
+```
+
+### Image Pulls
+
+Starting or restarting a compose service does not pull images by default.
+The per-service pull policy maps onto `docker compose up --pull`:
+
+| Policy | Behavior |
+|--------|----------|
+| `missing` (default) | Pull only images that are not present locally |
+| `always` | Pull on every start and restart |
+| `never` | Never pull; a missing image fails the start |
+
+Pin images to a digest (`image: postgres:16@sha256:...`) and upgrade on purpose:
+
+```bash
+reign update myservice --pull always   # change the policy
+reign pull myservice                    # pull without restarting
+reign restart --pull myservice          # pull, then restart (a failed pull aborts)
 ```
 
 ### Enable / Disable
@@ -282,7 +306,8 @@ Stops the service if running and removes it from the database.
 POST /services/{id}/start
 ```
 
-Pulls images (for compose) and starts the service.
+Starts the service. Compose images are pulled according to the service's
+`pull_policy` (default `missing`).
 
 ### Stop Service
 
@@ -298,7 +323,16 @@ Gracefully stops the service.
 POST /services/{id}/restart
 ```
 
-Stops and starts the service.
+Stops and starts the service. With `?pull=true` (compose only), images are
+pulled first while the service keeps running, and a failed pull aborts the restart.
+
+### Pull Images
+
+```bash
+POST /services/{id}/pull
+```
+
+Pulls a compose service's images synchronously without restarting it.
 
 ### Service Logs
 

@@ -57,6 +57,8 @@ func Run(args []string) (bool, error) {
 		return true, runActionCommand("stop", args[2:])
 	case "restart":
 		return true, runActionCommand("restart", args[2:])
+	case "pull":
+		return true, runPullCommand(args[2:])
 	case "create", "add":
 		return true, runCreateCommand(args[2:])
 	case "update", "set":
@@ -171,6 +173,10 @@ func runShowCommand(args []string) error {
 func runActionCommand(action string, args []string) error {
 	fs := flag.NewFlagSet(action, flag.ExitOnError)
 	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
+	var pull *bool
+	if action == "restart" {
+		pull = fs.Bool("pull", false, "Pull images before restarting (compose only)")
+	}
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -187,7 +193,30 @@ func runActionCommand(action string, args []string) error {
 
 	client := NewClient(addr)
 	cmd := NewActionCommand(client, action, fs.Arg(0))
+	if pull != nil {
+		cmd.pull = *pull
+	}
 	return cmd.Run()
+}
+
+func runPullCommand(args []string) error {
+	fs := flag.NewFlagSet("pull", flag.ExitOnError)
+	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
+	fs.Parse(args)
+
+	if fs.NArg() < 1 {
+		return fmt.Errorf("usage: reign pull [options] <service-id>")
+	}
+
+	addr := *server
+	if addr == "" {
+		addr = os.Getenv("REIGN_SERVER")
+	}
+	if addr == "" {
+		addr = defaultServerAddr
+	}
+
+	return NewPullCommand(NewClient(addr), fs.Arg(0)).Run()
 }
 
 func runCreateCommand(args []string) error {
@@ -207,6 +236,7 @@ func runCreateCommand(args []string) error {
 	command := fs.String("command", "", "Command for binary services (optional)")
 	workDir := fs.String("workdir", "", "Working directory for binary services (optional)")
 	envFile := fs.String("envfile", "", "Path to env file for binary services (optional)")
+	pullPolicy := fs.String("pull", "", "Image pull policy for compose services: missing, always, never (default: missing)")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false (default: true)")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false (default: false)")
 
@@ -240,15 +270,16 @@ func runCreateCommand(args []string) error {
 	}
 
 	opts := &CreateUpdateOptions{
-		JSONFile: file,
-		JSONData: jsonData,
-		ID:       *id,
-		Name:     *name,
-		Type:     *svcType,
-		Path:     *path,
-		Command:  *command,
-		WorkDir:  *workDir,
-		EnvFile:  *envFile,
+		JSONFile:   file,
+		JSONData:   jsonData,
+		ID:         *id,
+		Name:       *name,
+		Type:       *svcType,
+		Path:       *path,
+		Command:    *command,
+		WorkDir:    *workDir,
+		EnvFile:    *envFile,
+		PullPolicy: *pullPolicy,
 	}
 
 	if *enabled != "" {
@@ -280,6 +311,7 @@ func runUpdateCommand(args []string) error {
 	command := fs.String("command", "", "Command for binary services")
 	workDir := fs.String("workdir", "", "Working directory for binary services")
 	envFile := fs.String("envfile", "", "Path to env file for binary services")
+	pullPolicy := fs.String("pull", "", "Image pull policy for compose services: missing, always, never")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false")
 
@@ -315,14 +347,15 @@ func runUpdateCommand(args []string) error {
 	}
 
 	opts := &CreateUpdateOptions{
-		JSONFile: file,
-		JSONData: jsonData,
-		Name:     *name,
-		Type:     *svcType,
-		Path:     *path,
-		Command:  *command,
-		WorkDir:  *workDir,
-		EnvFile:  *envFile,
+		JSONFile:   file,
+		JSONData:   jsonData,
+		Name:       *name,
+		Type:       *svcType,
+		Path:       *path,
+		Command:    *command,
+		WorkDir:    *workDir,
+		EnvFile:    *envFile,
+		PullPolicy: *pullPolicy,
 	}
 
 	if *enabled != "" {
@@ -485,8 +518,12 @@ func runHelpCommand(args []string) error {
 			printCreateHelp()
 		case "update", "set":
 			printUpdateHelp()
-		case "start", "stop", "restart":
+		case "start", "stop":
 			printActionHelp(args[0])
+		case "restart":
+			printRestartHelp()
+		case "pull":
+			printPullHelp()
 		case "delete", "rm", "remove":
 			printDeleteHelp()
 		case "logs":
@@ -521,6 +558,7 @@ Commands:
   start           Start a service
   stop            Stop a service
   restart         Restart a service
+  pull            Pull a compose service's images (without restarting)
   logs            View service logs
   events          View event log across all services
   enable          Enable a service
@@ -615,6 +653,8 @@ Options:
   --path            Path to compose file (required for compose)
   --command         Command to run (required for binary)
   --workdir         Working directory for binary services
+  --envfile         Env file for binary services
+  --pull            Image pull policy for compose: missing, always, never (default: missing)
   --enabled         Whether service is enabled: true/false (default: true)
   --infrastructure  Whether service is infrastructure: true/false (default: false)
 
@@ -647,6 +687,8 @@ Options:
   --path            Path to compose file or binary
   --command         Command for binary services
   --workdir         Working directory for binary services
+  --envfile         Env file for binary services
+  --pull            Image pull policy for compose: missing, always, never
   --enabled         Whether service is enabled: true/false
   --infrastructure  Whether service is infrastructure: true/false
 
@@ -671,6 +713,38 @@ Options:
 Examples:
   reign %s myservice
 `, action, strings.Title(action), action)
+}
+
+func printRestartHelp() {
+	fmt.Print(`Usage: reign restart [options] <service-id>
+
+Restart a service. Images are not pulled unless --pull is given (or the
+service's pull policy is 'always').
+
+Options:
+  --server    Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
+  --pull      Pull images first, while the service keeps running. A failed
+              pull aborts the restart. Compose services only.
+
+Examples:
+  reign restart myservice
+  reign restart --pull myservice
+`)
+}
+
+func printPullHelp() {
+	fmt.Print(`Usage: reign pull [options] <service-id>
+
+Pull the images of a compose service without restarting it. Use
+'reign restart' afterwards to switch to the new images, or
+'reign restart --pull' to do both in one step.
+
+Options:
+  --server    Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
+
+Examples:
+  reign pull myservice && reign restart myservice
+`)
 }
 
 func printDeleteHelp() {

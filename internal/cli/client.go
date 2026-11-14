@@ -88,6 +88,7 @@ type ServiceRequest struct {
 	Command        string `json:"command,omitempty"`
 	WorkDir        string `json:"work_dir,omitempty"`
 	EnvFile        string `json:"env_file,omitempty"`
+	PullPolicy     string `json:"pull_policy,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
@@ -107,6 +108,7 @@ type ServiceWithState struct {
 	Command        string       `json:"command,omitempty"`
 	WorkDir        string       `json:"work_dir,omitempty"`
 	EnvFile        string       `json:"env_file,omitempty"`
+	PullPolicy     string       `json:"pull_policy,omitempty"`
 	Enabled        bool         `json:"enabled"`
 	Infrastructure bool         `json:"infrastructure"`
 	CreatedAt      time.Time    `json:"created_at"`
@@ -237,9 +239,14 @@ func (c *Client) StopService(id string) (*ServiceWithState, error) {
 	return &resp, nil
 }
 
-// RestartService restarts a service.
-func (c *Client) RestartService(id string) (*ServiceWithState, error) {
-	data, err := c.doRequest(http.MethodPost, "/services/"+id+"/restart", nil)
+// RestartService restarts a service. With pull set, the server pulls images
+// before stopping the service and aborts the restart if the pull fails.
+func (c *Client) RestartService(id string, pull bool) (*ServiceWithState, error) {
+	path := "/services/" + id + "/restart"
+	if pull {
+		path += "?pull=true"
+	}
+	data, err := c.doRequest(http.MethodPost, path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -250,6 +257,18 @@ func (c *Client) RestartService(id string) (*ServiceWithState, error) {
 	}
 
 	return &resp, nil
+}
+
+// pullTimeout bounds a synchronous image pull, which can take far longer than
+// the default request timeout.
+const pullTimeout = 30 * time.Minute
+
+// PullService pulls a compose service's images without restarting it.
+func (c *Client) PullService(id string) error {
+	pc := *c
+	pc.httpClient = &http.Client{Timeout: pullTimeout}
+	_, err := pc.doRequest(http.MethodPost, "/services/"+id+"/pull", nil)
+	return err
 }
 
 // EventLogEntry represents an event with service context.

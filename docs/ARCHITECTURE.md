@@ -130,8 +130,10 @@ type Executor interface {
 ```
 
 **Docker Compose Executor:**
-- Runs `docker compose pull` before starting
-- Runs `docker compose up -d` from the service directory
+- Runs `docker compose up -d` from the service directory, adding `--pull always|never`
+  when the service's pull policy asks for it (default `missing` needs no flag)
+- Never pulls as part of a start; `docker compose pull` only runs for
+  `reign pull` and `reign restart --pull`
 - Runs `docker compose stop` to stop
 - Parses `docker compose ps --format json` for status
 
@@ -186,8 +188,8 @@ API Request: POST /services/{id}/start
        │
        ▼
 ┌──────────────┐
-│   Executor   │ ── docker compose pull
-└──────────────┘    docker compose up -d
+│   Executor   │ ── docker compose up -d [--pull always|never]
+└──────────────┘
        │
        ▼
 ┌──────────────┐
@@ -217,13 +219,11 @@ Filter infrastructure services
        │
        ▼
 For each infra service (alphabetically):
-  ├── Pull images
   ├── Start service
   └── Wait for healthy status
        │
        ▼
 For each regular service (alphabetically):
-  ├── Pull images
   └── Start service
        │
        ▼
@@ -246,7 +246,6 @@ All Docker Compose commands are executed:
 
 Example:
 ```bash
-cd /home/tim/bookmarks && /usr/bin/docker compose -f docker-compose.yml pull
 cd /home/tim/bookmarks && /usr/bin/docker compose -f docker-compose.yml up -d
 cd /home/tim/bookmarks && /usr/bin/docker compose -f docker-compose.yml ps --format json
 cd /home/tim/bookmarks && /usr/bin/docker compose -f docker-compose.yml stop

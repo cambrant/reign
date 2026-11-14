@@ -106,6 +106,7 @@ func (c *ShowCommand) Run() error {
 			Command        string `json:"command,omitempty"`
 			WorkDir        string `json:"work_dir,omitempty"`
 			EnvFile        string `json:"env_file,omitempty"`
+			PullPolicy     string `json:"pull_policy,omitempty"`
 			Enabled        bool   `json:"enabled"`
 			Infrastructure bool   `json:"infrastructure"`
 		}{
@@ -116,6 +117,7 @@ func (c *ShowCommand) Run() error {
 			Command:        resp.Command,
 			WorkDir:        resp.WorkDir,
 			EnvFile:        resp.EnvFile,
+			PullPolicy:     resp.PullPolicy,
 			Enabled:        resp.Enabled,
 			Infrastructure: resp.Infrastructure,
 		}
@@ -140,6 +142,13 @@ func (c *ShowCommand) Run() error {
 	}
 	if resp.EnvFile != "" {
 		fmt.Printf("  Env File:       %s\n", resp.EnvFile)
+	}
+	if resp.Type == "compose" {
+		policy := resp.PullPolicy
+		if policy == "" {
+			policy = "missing"
+		}
+		fmt.Printf("  Pull Policy:    %s\n", policy)
 	}
 	fmt.Printf("  Enabled:        %v\n", resp.Enabled)
 	fmt.Printf("  Infrastructure: %v\n", resp.Infrastructure)
@@ -215,6 +224,7 @@ func (c *DumpCommand) Run() error {
 		Command        string `json:"command,omitempty"`
 		WorkDir        string `json:"work_dir,omitempty"`
 		EnvFile        string `json:"env_file,omitempty"`
+		PullPolicy     string `json:"pull_policy,omitempty"`
 		Enabled        bool   `json:"enabled"`
 		Infrastructure bool   `json:"infrastructure"`
 	}{
@@ -225,6 +235,7 @@ func (c *DumpCommand) Run() error {
 		Command:        resp.Command,
 		WorkDir:        resp.WorkDir,
 		EnvFile:        resp.EnvFile,
+		PullPolicy:     resp.PullPolicy,
 		Enabled:        resp.Enabled,
 		Infrastructure: resp.Infrastructure,
 	}
@@ -254,6 +265,7 @@ type ActionCommand struct {
 	client    *Client
 	action    string
 	serviceID string
+	pull      bool // restart only: pull images first
 }
 
 // NewActionCommand creates a new action command.
@@ -280,13 +292,18 @@ func (c *ActionCommand) Run() error {
 	case "stop":
 		svc, err = c.client.StopService(c.serviceID)
 	case "restart":
-		svc, err = c.client.RestartService(c.serviceID)
+		svc, err = c.client.RestartService(c.serviceID, c.pull)
 	default:
 		return fmt.Errorf("unknown action: %s", c.action)
 	}
 
 	if err != nil {
 		return err
+	}
+
+	if c.action == "restart" && c.pull {
+		fmt.Printf("Service '%s' is pulling images, then restarting (see reign events)\n", svc.ID)
+		return nil
 	}
 
 	status := svc.State.Status
@@ -314,6 +331,30 @@ func getActionPastTense(action string) string {
 	}
 }
 
+// PullCommand handles the 'pull' subcommand.
+type PullCommand struct {
+	client    *Client
+	serviceID string
+}
+
+// NewPullCommand creates a new pull command.
+func NewPullCommand(client *Client, serviceID string) *PullCommand {
+	return &PullCommand{client: client, serviceID: serviceID}
+}
+
+// Run pulls the service's images. The running containers are not touched.
+func (c *PullCommand) Run() error {
+	if c.serviceID == "" {
+		return fmt.Errorf("service ID is required")
+	}
+	fmt.Printf("Pulling images for '%s'...\n", c.serviceID)
+	if err := c.client.PullService(c.serviceID); err != nil {
+		return err
+	}
+	fmt.Printf("Pulled images for '%s'. Run 'reign restart %s' to use them.\n", c.serviceID, c.serviceID)
+	return nil
+}
+
 // CreateCommand handles the 'create' subcommand.
 type CreateCommand struct {
 	client  *Client
@@ -334,6 +375,7 @@ type CreateUpdateOptions struct {
 	Command        string
 	WorkDir        string
 	EnvFile        string
+	PullPolicy     string
 	Enabled        *bool
 	Infrastructure *bool
 }
@@ -422,6 +464,9 @@ func (c *CreateCommand) buildRequest() (*ServiceRequest, error) {
 	if c.options.EnvFile != "" {
 		req.EnvFile = c.options.EnvFile
 	}
+	if c.options.PullPolicy != "" {
+		req.PullPolicy = c.options.PullPolicy
+	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled
 	}
@@ -461,7 +506,7 @@ func (c *UpdateCommand) Run() error {
 
 	// Check that at least one field is being updated
 	if req.Name == "" && req.Type == "" && req.Path == "" &&
-		req.Command == "" && req.WorkDir == "" && req.EnvFile == "" && req.Enabled == nil && req.Infrastructure == nil {
+		req.Command == "" && req.WorkDir == "" && req.EnvFile == "" && req.PullPolicy == "" && req.Enabled == nil && req.Infrastructure == nil {
 		return fmt.Errorf("at least one field must be provided to update")
 	}
 
@@ -510,6 +555,9 @@ func (c *UpdateCommand) buildRequest() (*ServiceRequest, error) {
 	}
 	if c.options.EnvFile != "" {
 		req.EnvFile = c.options.EnvFile
+	}
+	if c.options.PullPolicy != "" {
+		req.PullPolicy = c.options.PullPolicy
 	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled

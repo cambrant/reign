@@ -26,6 +26,28 @@ const (
 	StatusDisabled ServiceStatus = "disabled"
 )
 
+// PullPolicy decides when images of a compose service are pulled on start.
+// It maps directly onto `docker compose up --pull`.
+type PullPolicy string
+
+const (
+	// PullMissing pulls only images that are not present locally (compose's default).
+	PullMissing PullPolicy = "missing"
+	// PullAlways pulls every image on every start and restart.
+	PullAlways PullPolicy = "always"
+	// PullNever never pulls; a missing image makes the start fail.
+	PullNever PullPolicy = "never"
+)
+
+// ValidPullPolicy reports whether p is a known pull policy. Empty means the default (missing).
+func ValidPullPolicy(p PullPolicy) bool {
+	switch p {
+	case "", PullMissing, PullAlways, PullNever:
+		return true
+	}
+	return false
+}
+
 // Service represents a managed service.
 type Service struct {
 	ID             string      `json:"id"`
@@ -35,6 +57,7 @@ type Service struct {
 	Command        string      `json:"command,omitempty"`
 	WorkDir        string      `json:"work_dir,omitempty"`
 	EnvFile        string      `json:"env_file,omitempty"`
+	PullPolicy     PullPolicy  `json:"pull_policy,omitempty"`
 	Enabled        bool        `json:"enabled"`
 	Infrastructure bool        `json:"infrastructure"`
 	CreatedAt      time.Time   `json:"created_at"`
@@ -71,10 +94,10 @@ type ServiceEvent struct {
 // Create inserts a new service into the database.
 func (s *Service) Create(db *sql.DB) error {
 	query := `
-		INSERT INTO services (id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		INSERT INTO services (id, name, type, path, command, work_dir, env_file, pull_policy, enabled, infrastructure, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 	`
-	_, err := db.Exec(query, s.ID, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.Enabled, s.Infrastructure)
+	_, err := db.Exec(query, s.ID, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.PullPolicy, s.Enabled, s.Infrastructure)
 	if err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
 	}
@@ -100,10 +123,10 @@ func (s *Service) Create(db *sql.DB) error {
 func (s *Service) Update(db *sql.DB) error {
 	query := `
 		UPDATE services
-		SET name = ?, type = ?, path = ?, command = ?, work_dir = ?, env_file = ?, enabled = ?, infrastructure = ?, updated_at = datetime('now')
+		SET name = ?, type = ?, path = ?, command = ?, work_dir = ?, env_file = ?, pull_policy = ?, enabled = ?, infrastructure = ?, updated_at = datetime('now')
 		WHERE id = ?
 	`
-	result, err := db.Exec(query, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.Enabled, s.Infrastructure, s.ID)
+	result, err := db.Exec(query, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.PullPolicy, s.Enabled, s.Infrastructure, s.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update service: %w", err)
 	}
@@ -119,117 +142,80 @@ func (s *Service) Update(db *sql.DB) error {
 	return nil
 }
 
-// GetServiceByID retrieves a service by its ID.
-func GetServiceByID(db *sql.DB, id string) (*Service, error) {
-	query := `
-		SELECT id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at
-		FROM services
-		WHERE id = ?
-	`
+// serviceColumns is the column list every service query selects, in scanService order.
+const serviceColumns = `id, name, type, path, command, work_dir, env_file, pull_policy, enabled, infrastructure, created_at, updated_at`
+
+// rowScanner is the common part of *sql.Row and *sql.Rows.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanService reads one row selected with serviceColumns.
+func scanService(row rowScanner) (Service, error) {
 	var s Service
 	var createdAt, updatedAt string
-	var command, workDir, envFile sql.NullString
-	err := db.QueryRow(query, id).Scan(
-		&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt,
-	)
+	var command, workDir, envFile, pullPolicy sql.NullString
+	if err := row.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &pullPolicy,
+		&s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
+		return Service{}, err
+	}
+	s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+	s.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	s.Command = command.String
+	s.WorkDir = workDir.String
+	s.EnvFile = envFile.String
+	s.PullPolicy = PullPolicy(pullPolicy.String)
+	return s, nil
+}
+
+// queryServices runs a service query and scans every row.
+func queryServices(db *sql.DB, query string, args ...any) ([]Service, error) {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var services []Service
+	for rows.Next() {
+		s, err := scanService(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan service: %w", err)
+		}
+		services = append(services, s)
+	}
+	return services, rows.Err()
+}
+
+// GetServiceByID retrieves a service by its ID.
+func GetServiceByID(db *sql.DB, id string) (*Service, error) {
+	s, err := scanService(db.QueryRow(`SELECT `+serviceColumns+` FROM services WHERE id = ?`, id))
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service: %w", err)
 	}
-
-	s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	s.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
-	if command.Valid {
-		s.Command = command.String
-	}
-	if workDir.Valid {
-		s.WorkDir = workDir.String
-	}
-	if envFile.Valid {
-		s.EnvFile = envFile.String
-	}
-
 	return &s, nil
 }
 
 // ListServices retrieves all services.
 func ListServices(db *sql.DB) ([]Service, error) {
-	query := `
-		SELECT id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at
-		FROM services
-		ORDER BY id
-	`
-	rows, err := db.Query(query)
+	services, err := queryServices(db, `SELECT `+serviceColumns+` FROM services ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list services: %w", err)
 	}
-	defer rows.Close()
-
-	var services []Service
-	for rows.Next() {
-		var s Service
-		var createdAt, updatedAt string
-		var command, workDir, envFile sql.NullString
-		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan service: %w", err)
-		}
-		s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-		s.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
-		if command.Valid {
-			s.Command = command.String
-		}
-		if workDir.Valid {
-			s.WorkDir = workDir.String
-		}
-		if envFile.Valid {
-			s.EnvFile = envFile.String
-		}
-		services = append(services, s)
-	}
-
-	return services, rows.Err()
+	return services, nil
 }
 
 // ListEnabledServicesForStartup retrieves enabled services ordered for startup.
 // Infrastructure services come first (alphabetically), then regular services (alphabetically).
 func ListEnabledServicesForStartup(db *sql.DB) ([]Service, error) {
-	query := `
-		SELECT id, name, type, path, command, work_dir, env_file, enabled, infrastructure, created_at, updated_at
-		FROM services
-		WHERE enabled = 1
-		ORDER BY infrastructure DESC, id ASC
-	`
-	rows, err := db.Query(query)
+	services, err := queryServices(db, `SELECT `+serviceColumns+` FROM services WHERE enabled = 1 ORDER BY infrastructure DESC, id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list services for startup: %w", err)
 	}
-	defer rows.Close()
-
-	var services []Service
-	for rows.Next() {
-		var s Service
-		var createdAt, updatedAt string
-		var command, workDir, envFile sql.NullString
-		if err := rows.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
-			return nil, fmt.Errorf("failed to scan service: %w", err)
-		}
-		s.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-		s.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
-		if command.Valid {
-			s.Command = command.String
-		}
-		if workDir.Valid {
-			s.WorkDir = workDir.String
-		}
-		if envFile.Valid {
-			s.EnvFile = envFile.String
-		}
-		services = append(services, s)
-	}
-
-	return services, rows.Err()
+	return services, nil
 }
 
 // DeleteService removes a service from the database.
