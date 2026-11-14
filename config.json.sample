@@ -6,5 +6,6 @@
   "healthCheckInterval": "30s",
   "restartDelay": "30s",
   "maxRestarts": 5,
-  "shutdownTimeout": "30s"
+  "shutdownTimeout": "30s",
+  "binaryRunner": "auto"
 }

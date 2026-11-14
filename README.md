@@ -82,6 +82,8 @@ Configuration file (`config.json`):
 | `listenAddr` | `127.0.0.1:7890` | HTTP API listen address |
 | `databasePath` | `/var/lib/reign/reign.db` | SQLite database location |
 | `logLevel` | `info` | Log level: debug, info, warn, error |
+| `binaryRunner` | `auto` | How binary services run: `systemd` (transient units), `direct` (child processes), `auto` (systemd if `systemd-run` exists) |
+| `runtimeDir` | `/run/reign` | Short-lived files, e.g. env files handed to transient units |
 
 ---
 
@@ -370,9 +372,22 @@ Returns recent logs from the service (compose) or journald (binary).
 
 ### Native Binary (`type: "binary"`)
 
-- `path` is the full path to the executable
-- Stdout/stderr are captured to journald
-- Working directory is the binary's parent directory
+- `command` is the command line; `work_dir` (or `path`) is the working directory
+- `env_file` is loaded into the environment (`KEY=value`, optional `export`, quotes stripped)
+- Stdout/stderr go to journald with the service name as identifier (`journalctl -t <name>`)
+
+With `binaryRunner` `systemd` (the default where `systemd-run` exists), each
+binary service runs in its own transient unit, `reign-<id>.service`:
+
+- Restarting reign (e.g. deploying a new binary) does not touch running binary
+  services; reign finds them again through systemd.
+- Each service has its own cgroup: `systemctl status reign-<id>`,
+  `systemd-cgtop`, and journald attribute resources and output to it.
+- The unit does not inherit reign's environment, only the env file and
+  systemd's defaults.
+
+With `direct`, binary services are child processes of reign and are killed
+when reign restarts (systemd's default `KillMode=control-group`).
 
 ---
 

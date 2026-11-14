@@ -183,3 +183,27 @@ func TestLoadNonExistentFile(t *testing.T) {
 		t.Errorf("error = %q, want containing 'failed to read'", err.Error())
 	}
 }
+
+func TestBinaryRunnerValidation(t *testing.T) {
+	tests := []struct {
+		runner  string
+		wantErr bool
+	}{
+		{"auto", false},
+		{"systemd", false},
+		{"direct", false},
+		{"docker", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.runner, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(`{"binaryRunner":"`+tt.runner+`"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Load(binaryRunner=%q) err = %v, wantErr %v", tt.runner, err, tt.wantErr)
+			}
+		})
+	}
+}

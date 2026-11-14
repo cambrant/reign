@@ -5,6 +5,9 @@ Requires=docker.service
 
 [Service]
 Type=simple
+# KillMode stays at the default (control-group). Binary services run in their
+# own transient units (binaryRunner "systemd"), outside this cgroup, so
+# restarting reign does not stop them.
 ExecStart=/usr/local/bin/reign -config /etc/reign/config.json
 Restart=always
 RestartSec=5

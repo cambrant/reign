@@ -70,6 +70,7 @@ func main() {
 
 	// Create orchestrator
 	orch := orchestrator.New(db, cfg)
+	logger.Info("Binary services run in %s mode", orch.BinaryMode())
 
 	// Set up HTTP handlers
 	mux := http.NewServeMux()

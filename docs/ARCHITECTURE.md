@@ -100,6 +100,8 @@ Handles loading configuration from JSON files with sensible defaults.
 | `logLevel` | string | `info` | Log level (debug, info, warn, error) |
 | `startupTimeout` | duration | `5m` | Max time to wait for services on startup |
 | `healthCheckInterval` | duration | `30s` | Interval between health checks |
+| `binaryRunner` | string | `auto` | `systemd`, `direct`, or `auto` |
+| `runtimeDir` | string | `/run/reign` | Directory for short-lived runtime files |
 
 ### Logger (`internal/logger/`)
 
@@ -137,11 +139,15 @@ type Executor interface {
 - Runs `docker compose stop` to stop
 - Parses `docker compose ps --format json` for status
 
-**Binary Executor:**
-- Forks the binary process
-- Redirects stdout/stderr to journald via systemd-cat
-- Tracks PID for monitoring
-- Sends SIGTERM for graceful stop, SIGKILL after timeout
+**Binary Executor** (mode set by `binaryRunner`):
+- `systemd` mode: `systemd-run --unit=reign-<id>.service --service-type=exec` with
+  `SyslogIdentifier`, `WorkingDirectory`, `TimeoutStopSec` and, for env files, an
+  `EnvironmentFile` rewritten in systemd syntax under `runtimeDir` (0600, removed
+  once the unit has started). Status comes from the unit's `ActiveState`, stop is
+  `systemctl stop`. Units are independent of reign's cgroup, so they survive reign
+  restarts and need no re-adoption.
+- `direct` mode: forks the binary under `systemd-cat`, tracks the process in
+  memory, SIGTERM to stop and SIGKILL after the timeout. Processes die with reign.
 
 ### Orchestrator (`internal/orchestrator/`)
 
@@ -253,7 +259,16 @@ cd /home/tim/bookmarks && /usr/bin/docker compose -f docker-compose.yml stop
 
 ### Native Binary Execution
 
-Binaries are executed using `os/exec`:
+In `systemd` mode:
+```bash
+systemd-run --unit=reign-myapp.service --quiet --service-type=exec \
+  --property=SyslogIdentifier=myapp --property=WorkingDirectory=/opt/myapp \
+  --property=TimeoutStopSec=30 -- /usr/local/bin/myapp serve
+systemctl show -p ActiveState --value reign-myapp.service
+systemctl stop reign-myapp.service
+```
+
+In `direct` mode, binaries are executed using `os/exec`:
 - Working directory set to configured path
 - Stdout/stderr piped to `systemd-cat` with service name tag
 - PID stored in database for tracking

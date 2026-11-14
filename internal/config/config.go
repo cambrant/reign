@@ -24,6 +24,12 @@ type Config struct {
 	ShutdownTimeout     time.Duration `json:"-"`
 	ShutdownTimeoutStr  string        `json:"shutdownTimeout"`
 	KeepRunning         bool          `json:"keepRunning"`
+	// BinaryRunner selects how binary services run: "systemd" (each in its own
+	// transient unit, survives reign restarts), "direct" (child processes of
+	// reign), or "auto" (systemd when systemd-run is available).
+	BinaryRunner string `json:"binaryRunner"`
+	// RuntimeDir holds short-lived files such as env files for transient units.
+	RuntimeDir string `json:"runtimeDir"`
 }
 
 // DefaultConfig returns a configuration with sensible defaults.
@@ -42,6 +48,8 @@ func DefaultConfig() *Config {
 		ShutdownTimeout:     30 * time.Second,
 		ShutdownTimeoutStr:  "30s",
 		KeepRunning:         true,
+		BinaryRunner:        "auto",
+		RuntimeDir:          "/run/reign",
 	}
 }
 
@@ -153,6 +161,12 @@ func (c *Config) validate() error {
 
 	if c.MaxRestarts < 0 {
 		return fmt.Errorf("maxRestarts cannot be negative")
+	}
+
+	switch c.BinaryRunner {
+	case "auto", "systemd", "direct":
+	default:
+		return fmt.Errorf("invalid binaryRunner: %s (must be auto, systemd, or direct)", c.BinaryRunner)
 	}
 
 	return nil

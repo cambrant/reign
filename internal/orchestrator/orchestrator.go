@@ -47,7 +47,11 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		db:              db,
 		config:          cfg,
 		composeExecutor: &executor.ComposeExecutor{},
-		binaryExecutor:  executor.NewBinaryExecutor(),
+		binaryExecutor: executor.NewBinaryExecutorWithOptions(executor.BinaryOptions{
+			Mode:        executor.ResolveBinaryMode(cfg.BinaryRunner),
+			EnvDir:      cfg.RuntimeDir,
+			StopTimeout: cfg.ShutdownTimeout,
+		}),
 		startedAt:       time.Now(),
 		stopChan:        make(chan struct{}),
 		pendingRestarts: make(map[string]bool),
@@ -290,7 +294,7 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 	// Get PID for binary services
 	var pid *int
 	if service.Type == models.ServiceTypeBinary {
-		pid = o.binaryExecutor.GetPID(id)
+		pid = o.binaryExecutor.GetPID(ctx, service)
 	}
 
 	// Update status to running
@@ -407,7 +411,7 @@ func (o *Orchestrator) StartServiceAsync(ctx context.Context, id string) (*model
 
 		var pid *int
 		if service.Type == models.ServiceTypeBinary {
-			pid = o.binaryExecutor.GetPID(id)
+			pid = o.binaryExecutor.GetPID(ctx, service)
 		}
 
 		if err := models.SetServiceStarted(o.db, id, pid); err != nil {
@@ -887,6 +891,11 @@ func (o *Orchestrator) getExecutor(serviceType models.ServiceType) executor.Exec
 	default:
 		return nil
 	}
+}
+
+// BinaryMode returns how binary services are run (systemd or direct).
+func (o *Orchestrator) BinaryMode() string {
+	return o.binaryExecutor.Mode()
 }
 
 // GetStats returns orchestrator-level statistics.
