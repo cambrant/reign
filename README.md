@@ -18,7 +18,7 @@ Reign manages Docker Compose projects and native binaries on a single Linux serv
 - **Explicit Image Pulls**: Per-service pull policy (`missing` by default); upgrades via `reign pull` or `reign restart --pull`
 - **Persistent State**: SQLite database tracks all services
 - **Event Logging**: Audit trail of all service operations, including who requested each one
-- **Health Monitoring**: Report container status and statistics
+- **Health Monitoring**: Cheap periodic checks (one Docker API call per tick) plus Docker events for immediate reaction
 
 ---
 

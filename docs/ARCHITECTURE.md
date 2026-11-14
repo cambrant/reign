@@ -164,7 +164,11 @@ Core service lifecycle management:
    - Start remaining services (alphabetically)
 
 2. **Runtime Management:**
-   - Periodic health checks
+   - Periodic health checks, started evenly over the interval on up to three workers
+   - A Docker event watcher (`GET /events` on the socket) that checks a project
+     2s after its containers start, die, stop, get killed, run out of memory or
+     change health, instead of waiting for the next tick; it reconnects with
+     backoff, and the periodic check remains the safety net
    - Automatic restart on failure (for compose projects)
    - State tracking and persistence
 

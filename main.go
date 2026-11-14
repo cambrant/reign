@@ -152,6 +152,9 @@ func main() {
 	// Start health checker
 	orch.StartHealthChecker(ctx)
 
+	// React to container events between health checks
+	orch.StartEventWatcher(ctx)
+
 	// Start HTTP server in goroutine
 	go func() {
 		logger.Info("HTTP API server starting")

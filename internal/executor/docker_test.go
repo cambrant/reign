@@ -123,3 +123,29 @@ func TestComposeStatusFallsBackToCLI(t *testing.T) {
 		t.Fatalf("Status = %q, %v; want running via CLI fallback", got, err)
 	}
 }
+
+func TestDockerEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/events" || !strings.Contains(r.URL.Query().Get("filters"), `"die"`) {
+			t.Errorf("unexpected request %s", r.URL)
+		}
+		w.Write([]byte(`{"Type":"container","Action":"die","Actor":{"ID":"abc","Attributes":{"com.docker.compose.project":"shop","name":"shop-web-1"}}}` + "\n"))
+		w.Write([]byte(`{"Type":"container","Action":"health_status: unhealthy","Actor":{"ID":"def","Attributes":{"com.docker.compose.project":"blog","name":"blog-app-1"}}}` + "\n"))
+		// closing the stream ends Events with an error
+	}))
+	defer srv.Close()
+
+	c := &DockerClient{http: srv.Client(), baseURL: srv.URL}
+	var got []ContainerEvent
+	err := c.Events(context.Background(), func(ev ContainerEvent) { got = append(got, ev) })
+	if err == nil {
+		t.Error("Events returned nil after the stream closed, want an error so the caller reconnects")
+	}
+	want := []ContainerEvent{
+		{Project: "shop", Action: "die", Name: "shop-web-1"},
+		{Project: "blog", Action: "health_status: unhealthy", Name: "blog-app-1"},
+	}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("events = %+v, want %+v", got, want)
+	}
+}

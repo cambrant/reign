@@ -129,3 +129,59 @@ func healthFromStatus(status string) string {
 	}
 	return ""
 }
+
+// ContainerEvent is a container lifecycle event of a compose project.
+type ContainerEvent struct {
+	Project string // com.docker.compose.project label
+	Action  string // die, stop, kill, oom, start, health_status: unhealthy, ...
+	Name    string // container name
+}
+
+// watchedActions are the container events that can change a project's status.
+var watchedActions = []string{"start", "die", "stop", "kill", "oom", "health_status"}
+
+// Events streams container events of compose projects to onEvent until ctx
+// is cancelled or the stream breaks; it returns the reason.
+func (c *DockerClient) Events(ctx context.Context, onEvent func(ContainerEvent)) error {
+	filters, _ := json.Marshal(map[string][]string{
+		"type":  {"container"},
+		"event": watchedActions,
+		"label": {labelProject},
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		c.baseURL+"/events?"+url.Values{"filters": {string(filters)}}.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	// The stream stays open indefinitely: no client timeout.
+	stream := &http.Client{Transport: c.http.Transport}
+	resp, err := stream.Do(req)
+	if err != nil {
+		return fmt.Errorf("docker events: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker events: %s", resp.Status)
+	}
+
+	dec := json.NewDecoder(resp.Body)
+	for {
+		var ev struct {
+			Action string `json:"Action"`
+			Actor  struct {
+				Attributes map[string]string `json:"Attributes"`
+			} `json:"Actor"`
+		}
+		if err := dec.Decode(&ev); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("docker events: %w", err)
+		}
+		onEvent(ContainerEvent{
+			Project: ev.Actor.Attributes[labelProject],
+			Action:  ev.Action,
+			Name:    ev.Actor.Attributes["name"],
+		})
+	}
+}

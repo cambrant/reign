@@ -48,6 +48,11 @@ type Orchestrator struct {
 	// observed caches the last status each executor reported (see probeStatus).
 	obsMu    sync.Mutex
 	observed map[string]Observation
+
+	// eventChecks holds the debounced checks triggered by Docker events.
+	eventMu       sync.Mutex
+	eventChecks   map[string]*time.Timer
+	eventDebounce time.Duration
 }
 
 const (
@@ -75,6 +80,8 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		serviceLocks:    make(map[string]*sync.Mutex),
 		restartPause:    time.Second,
 		observed:        make(map[string]Observation),
+		eventChecks:     make(map[string]*time.Timer),
+		eventDebounce:   eventDebounce,
 	}
 }
 

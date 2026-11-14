@@ -288,6 +288,26 @@ func (e *ComposeExecutor) projectContainers(ctx context.Context, project string)
 	return e.listByProject[project], nil
 }
 
+// Docker returns the executor's Docker API client, or nil if it uses the CLI only.
+func (e *ComposeExecutor) Docker() *DockerClient {
+	return e.docker
+}
+
+// ProjectName returns the compose project name of a service (from the cached config).
+func (e *ComposeExecutor) ProjectName(ctx context.Context, service *models.Service) (string, error) {
+	cfg, err := e.config(ctx, service.Path)
+	if err != nil {
+		return "", err
+	}
+	return cfg.Name, nil
+}
+
+// InvalidateContainers drops the cached container listing, e.g. after a
+// Docker event reported a change.
+func (e *ComposeExecutor) InvalidateContainers() {
+	e.invalidateContainers()
+}
+
 // invalidateContainers drops the cached listing after reign changed containers.
 func (e *ComposeExecutor) invalidateContainers() {
 	e.listMu.Lock()
