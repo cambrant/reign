@@ -369,3 +369,52 @@ func TestDisabledServiceInitialState(t *testing.T) {
 		t.Errorf("status = %q, want %q", state.Status, StatusDisabled)
 	}
 }
+
+func TestServiceRunAsUser(t *testing.T) {
+	db, err := InitDB(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("failed to init db: %v", err)
+	}
+	defer db.Close()
+
+	s := &Service{ID: "bin", Name: "bin", Type: ServiceTypeBinary, Command: "/bin/true", User: "svc-bin", Enabled: true}
+	if err := s.Create(db); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	got, err := GetServiceByID(db, "bin")
+	if err != nil || got == nil {
+		t.Fatalf("GetServiceByID: %v", err)
+	}
+	if got.User != "svc-bin" {
+		t.Errorf("User after create = %q, want svc-bin", got.User)
+	}
+
+	got.User = ""
+	if err := got.Update(db); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, _ = GetServiceByID(db, "bin")
+	if got.User != "" {
+		t.Errorf("User after clearing = %q, want empty", got.User)
+	}
+}
+
+func TestUserNameHelpers(t *testing.T) {
+	if NormalizeUser("root") != "" || NormalizeUser("") != "" || NormalizeUser("svc-x") != "svc-x" {
+		t.Error("NormalizeUser: root and empty must map to empty, others unchanged")
+	}
+	for name, want := range map[string]bool{
+		"":                                   true,
+		"svc-runbook":                        true,
+		"_daemon":                            true,
+		"Runbook":                            false,
+		"1abc":                               false,
+		"a b":                                false,
+		"x;rm -rf /":                         false,
+		"averyveryveryveryveryverylongname1": false,
+	} {
+		if got := ValidUserName(name); got != want {
+			t.Errorf("ValidUserName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

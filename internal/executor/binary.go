@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -144,10 +145,48 @@ func (e *BinaryExecutor) Start(ctx context.Context, service *models.Service) err
 		}
 	}
 
+	// Resolve the run-as account now, so a user deleted since the service was
+	// configured fails with a clear error instead of a systemd or exec one.
+	var cred *syscall.Credential
+	if service.User != "" {
+		cred, err = lookupCredential(service.User)
+		if err != nil {
+			return fmt.Errorf("service %s: %w", service.Name, err)
+		}
+	}
+
 	if e.Mode() == BinaryModeSystemd {
 		return e.startUnit(ctx, service, args, dir, envVars)
 	}
-	return e.startDirect(service, args, dir, envVars)
+	return e.startDirect(service, args, dir, envVars, cred)
+}
+
+// lookupCredential resolves an account name into the uid, gid and
+// supplementary groups a process running as that account gets.
+func lookupCredential(name string) (*syscall.Credential, error) {
+	u, err := user.Lookup(name)
+	if err != nil {
+		return nil, fmt.Errorf("run-as user %q: %w", name, err)
+	}
+	uid, err := strconv.ParseUint(u.Uid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("run-as user %q: bad uid %q", name, u.Uid)
+	}
+	gid, err := strconv.ParseUint(u.Gid, 10, 32)
+	if err != nil {
+		return nil, fmt.Errorf("run-as user %q: bad gid %q", name, u.Gid)
+	}
+	cred := &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
+	gids, err := u.GroupIds()
+	if err != nil {
+		return nil, fmt.Errorf("run-as user %q: groups: %w", name, err)
+	}
+	for _, g := range gids {
+		if n, err := strconv.ParseUint(g, 10, 32); err == nil {
+			cred.Groups = append(cred.Groups, uint32(n))
+		}
+	}
+	return cred, nil
 }
 
 // workDir returns the validated working directory of a service, or "".
@@ -277,6 +316,10 @@ func (e *BinaryExecutor) startUnit(ctx context.Context, service *models.Service,
 	if dir != "" {
 		runArgs = append(runArgs, "--property=WorkingDirectory="+dir)
 	}
+	// systemd also applies the account's primary and supplementary groups.
+	if service.User != "" {
+		runArgs = append(runArgs, "--property=User="+service.User)
+	}
 
 	// The env file is rewritten in systemd's format rather than passed as is,
 	// so values are parsed exactly as loadEnvFile parses them in direct mode.
@@ -375,7 +418,7 @@ func formatSystemdEnv(envVars []string) string {
 
 // --- direct mode ---
 
-func (e *BinaryExecutor) startDirect(service *models.Service, args []string, dir string, envVars []string) error {
+func (e *BinaryExecutor) startDirect(service *models.Service, args []string, dir string, envVars []string, cred *syscall.Credential) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.processes == nil {
@@ -398,8 +441,9 @@ func (e *BinaryExecutor) startDirect(service *models.Service, args []string, dir
 		cmd.Env = append(os.Environ(), envVars...)
 	}
 
-	// Set up process group for clean termination
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Set up process group for clean termination, and drop to the run-as
+	// account if one is set.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Credential: cred}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start %s: %w", service.Name, err)

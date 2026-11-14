@@ -55,6 +55,7 @@ func createSchema(db *sql.DB) error {
 		work_dir        TEXT,
 		env_file        TEXT,
 		pull_policy     TEXT,
+		run_as          TEXT,
 		enabled         INTEGER NOT NULL DEFAULT 1,
 		infrastructure  INTEGER NOT NULL DEFAULT 0,
 		created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -95,6 +96,7 @@ func createSchema(db *sql.DB) error {
 		"ALTER TABLE services ADD COLUMN work_dir TEXT",
 		"ALTER TABLE services ADD COLUMN env_file TEXT",
 		"ALTER TABLE services ADD COLUMN pull_policy TEXT",
+		"ALTER TABLE services ADD COLUMN run_as TEXT",
 		"ALTER TABLE service_events ADD COLUMN requester TEXT",
 	}
 	for _, m := range migrations {

@@ -256,6 +256,7 @@ func runCreateCommand(args []string) error {
 	workDir := fs.String("workdir", "", "Working directory for binary services (optional)")
 	envFile := fs.String("envfile", "", "Path to env file for binary services (optional)")
 	pullPolicy := fs.String("pull", "", "Image pull policy for compose services: missing, always, never (default: missing)")
+	runAs := fs.String("user", "", "Account a binary service runs as (default: root)")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false (default: true)")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false (default: false)")
 
@@ -299,6 +300,7 @@ func runCreateCommand(args []string) error {
 		WorkDir:    *workDir,
 		EnvFile:    *envFile,
 		PullPolicy: *pullPolicy,
+		User:       *runAs,
 	}
 
 	if *enabled != "" {
@@ -331,6 +333,7 @@ func runUpdateCommand(args []string) error {
 	workDir := fs.String("workdir", "", "Working directory for binary services")
 	envFile := fs.String("envfile", "", "Path to env file for binary services")
 	pullPolicy := fs.String("pull", "", "Image pull policy for compose services: missing, always, never")
+	runAs := fs.String("user", "", "Account a binary service runs as; \"root\" runs it as root again")
 	enabled := fs.String("enabled", "", "Whether service is enabled: true/false")
 	infrastructure := fs.String("infrastructure", "", "Whether service is infrastructure: true/false")
 
@@ -375,6 +378,7 @@ func runUpdateCommand(args []string) error {
 		WorkDir:    *workDir,
 		EnvFile:    *envFile,
 		PullPolicy: *pullPolicy,
+		User:       *runAs,
 	}
 
 	if *enabled != "" {

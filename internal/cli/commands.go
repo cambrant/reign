@@ -107,6 +107,7 @@ func (c *ShowCommand) Run() error {
 			WorkDir        string `json:"work_dir,omitempty"`
 			EnvFile        string `json:"env_file,omitempty"`
 			PullPolicy     string `json:"pull_policy,omitempty"`
+			User           string `json:"user,omitempty"`
 			Enabled        bool   `json:"enabled"`
 			Infrastructure bool   `json:"infrastructure"`
 		}{
@@ -118,6 +119,7 @@ func (c *ShowCommand) Run() error {
 			WorkDir:        resp.WorkDir,
 			EnvFile:        resp.EnvFile,
 			PullPolicy:     resp.PullPolicy,
+			User:           resp.User,
 			Enabled:        resp.Enabled,
 			Infrastructure: resp.Infrastructure,
 		}
@@ -142,6 +144,13 @@ func (c *ShowCommand) Run() error {
 	}
 	if resp.EnvFile != "" {
 		fmt.Printf("  Env File:       %s\n", resp.EnvFile)
+	}
+	if resp.Type == "binary" {
+		runAs := resp.User
+		if runAs == "" {
+			runAs = "root"
+		}
+		fmt.Printf("  User:           %s\n", runAs)
 	}
 	if resp.Type == "compose" {
 		policy := resp.PullPolicy
@@ -233,6 +242,7 @@ func (c *DumpCommand) Run() error {
 		WorkDir        string `json:"work_dir,omitempty"`
 		EnvFile        string `json:"env_file,omitempty"`
 		PullPolicy     string `json:"pull_policy,omitempty"`
+		User           string `json:"user,omitempty"`
 		Enabled        bool   `json:"enabled"`
 		Infrastructure bool   `json:"infrastructure"`
 	}{
@@ -244,6 +254,7 @@ func (c *DumpCommand) Run() error {
 		WorkDir:        resp.WorkDir,
 		EnvFile:        resp.EnvFile,
 		PullPolicy:     resp.PullPolicy,
+		User:           resp.User,
 		Enabled:        resp.Enabled,
 		Infrastructure: resp.Infrastructure,
 	}
@@ -457,6 +468,7 @@ type CreateUpdateOptions struct {
 	WorkDir        string
 	EnvFile        string
 	PullPolicy     string
+	User           string
 	Enabled        *bool
 	Infrastructure *bool
 }
@@ -548,6 +560,9 @@ func (c *CreateCommand) buildRequest() (*ServiceRequest, error) {
 	if c.options.PullPolicy != "" {
 		req.PullPolicy = c.options.PullPolicy
 	}
+	if c.options.User != "" {
+		req.User = c.options.User
+	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled
 	}
@@ -587,7 +602,7 @@ func (c *UpdateCommand) Run() error {
 
 	// Check that at least one field is being updated
 	if req.Name == "" && req.Type == "" && req.Path == "" &&
-		req.Command == "" && req.WorkDir == "" && req.EnvFile == "" && req.PullPolicy == "" && req.Enabled == nil && req.Infrastructure == nil {
+		req.Command == "" && req.WorkDir == "" && req.EnvFile == "" && req.PullPolicy == "" && req.User == "" && req.Enabled == nil && req.Infrastructure == nil {
 		return fmt.Errorf("at least one field must be provided to update")
 	}
 
@@ -639,6 +654,9 @@ func (c *UpdateCommand) buildRequest() (*ServiceRequest, error) {
 	}
 	if c.options.PullPolicy != "" {
 		req.PullPolicy = c.options.PullPolicy
+	}
+	if c.options.User != "" {
+		req.User = c.options.User
 	}
 	if c.options.Enabled != nil {
 		req.Enabled = c.options.Enabled

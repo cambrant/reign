@@ -180,6 +180,7 @@ reign show --json oldservice | jq '.id = "newservice"' | reign create -f -
 | `--workdir` | Working directory for binary services |
 | `--envfile` | Env file for binary services |
 | `--pull` | Compose pull policy: `missing` (default), `always`, `never` |
+| `--user` | Account a binary service runs as (default root; `--user root` on update resets it) |
 | `--enabled` | `true` / `false` (default: `true`) |
 | `--infrastructure` | `true` / `false` (default: `false`) |
 
@@ -467,6 +468,10 @@ Returns recent logs from the service (compose) or journald (binary).
 
 - `command` is the command line; `work_dir` (or `path`) is the working directory
 - `env_file` is loaded into the environment (`KEY=value`, optional `export`, quotes stripped)
+- `user` runs the service as that account (systemd `User=`, which also applies
+  its groups; direct mode sets the process credentials). Empty means root. The
+  account must exist when the service is created or updated and when it starts.
+  The env file is still read by root, so it can stay root-only (`600`).
 - Stdout/stderr go to journald with the service name as identifier (`journalctl -t <name>`)
 
 With `binaryRunner` `systemd` (the default where `systemd-run` exists), each

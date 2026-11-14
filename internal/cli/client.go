@@ -94,6 +94,7 @@ type ServiceRequest struct {
 	WorkDir        string `json:"work_dir,omitempty"`
 	EnvFile        string `json:"env_file,omitempty"`
 	PullPolicy     string `json:"pull_policy,omitempty"`
+	User           string `json:"user,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
@@ -114,6 +115,7 @@ type ServiceWithState struct {
 	WorkDir        string       `json:"work_dir,omitempty"`
 	EnvFile        string       `json:"env_file,omitempty"`
 	PullPolicy     string       `json:"pull_policy,omitempty"`
+	User           string       `json:"user,omitempty"`
 	Enabled        bool         `json:"enabled"`
 	Infrastructure bool         `json:"infrastructure"`
 	CreatedAt      time.Time    `json:"created_at"`

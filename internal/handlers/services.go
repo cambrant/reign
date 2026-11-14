@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os/user"
 	"strconv"
 	"strings"
 
@@ -60,8 +61,30 @@ type ServiceRequest struct {
 	WorkDir        string `json:"work_dir,omitempty"`
 	EnvFile        string `json:"env_file,omitempty"`
 	PullPolicy     string `json:"pull_policy,omitempty"`
+	User           string `json:"user,omitempty"`
 	Enabled        *bool  `json:"enabled,omitempty"`
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
+}
+
+// checkRunAsUser validates the account a service should run as and returns
+// it normalized ("root" becomes ""). Only binary services can run as another
+// user, and the account must exist on this host so a typo fails here rather
+// than at the next start.
+func checkRunAsUser(svcType models.ServiceType, name string) (string, error) {
+	name = models.NormalizeUser(name)
+	if name == "" {
+		return "", nil
+	}
+	if svcType != models.ServiceTypeBinary {
+		return "", fmt.Errorf("user is only supported for binary services")
+	}
+	if !models.ValidUserName(name) {
+		return "", fmt.Errorf("invalid user name %q", name)
+	}
+	if _, err := user.Lookup(name); err != nil {
+		return "", fmt.Errorf("user %q does not exist on this host", name)
+	}
+	return name, nil
 }
 
 // ServiceView is a service with its intended state and, once a health check
@@ -274,6 +297,11 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	runAs, err := checkRunAsUser(models.ServiceType(req.Type), req.User)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// Check if service already exists
 	existing, err := models.GetServiceByID(h.db, req.ID)
@@ -296,6 +324,7 @@ func (h *ServicesHandler) createService(w http.ResponseWriter, r *http.Request) 
 		WorkDir:        req.WorkDir,
 		EnvFile:        req.EnvFile,
 		PullPolicy:     models.PullPolicy(req.PullPolicy),
+		User:           runAs,
 		Enabled:        true,
 		Infrastructure: false,
 	}
@@ -375,6 +404,18 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		service.PullPolicy = models.PullPolicy(req.PullPolicy)
+	}
+	if req.User != "" {
+		runAs, err := checkRunAsUser(service.Type, req.User)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		service.User = runAs
+	}
+	if service.User != "" && service.Type != models.ServiceTypeBinary {
+		writeError(w, http.StatusBadRequest, "user is only supported for binary services")
+		return
 	}
 	if req.Enabled != nil {
 		service.Enabled = *req.Enabled

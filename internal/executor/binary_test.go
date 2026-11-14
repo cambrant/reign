@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -207,5 +208,57 @@ func TestSystemdStop(t *testing.T) {
 				t.Errorf("first command = %q", f.cmds[0])
 			}
 		})
+	}
+}
+
+func systemdRunCmd(f *fakeSystemd) string {
+	for _, c := range f.cmds {
+		if strings.HasPrefix(c, "systemd-run ") {
+			return c
+		}
+	}
+	return ""
+}
+
+func TestSystemdStartAsUser(t *testing.T) {
+	cur, err := user.Current()
+	if err != nil {
+		t.Skipf("no current user: %v", err)
+	}
+	f := &fakeSystemd{state: "inactive"}
+	e := newSystemdExecutor(t, f)
+	svc := &models.Service{ID: "app", Name: "app", Type: models.ServiceTypeBinary,
+		Command: "/bin/sleep 100", User: cur.Username}
+	if err := e.Start(context.Background(), svc); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if run := systemdRunCmd(f); !strings.Contains(run, "--property=User="+cur.Username) {
+		t.Errorf("systemd-run missing User=%s:\n%s", cur.Username, run)
+	}
+}
+
+func TestSystemdStartAsRootHasNoUser(t *testing.T) {
+	f := &fakeSystemd{state: "inactive"}
+	e := newSystemdExecutor(t, f)
+	svc := &models.Service{ID: "app", Name: "app", Type: models.ServiceTypeBinary, Command: "/bin/sleep 100"}
+	if err := e.Start(context.Background(), svc); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if run := systemdRunCmd(f); strings.Contains(run, "--property=User=") {
+		t.Errorf("systemd-run has a User= for a root service:\n%s", run)
+	}
+}
+
+func TestStartWithMissingUserFails(t *testing.T) {
+	f := &fakeSystemd{state: "inactive"}
+	e := newSystemdExecutor(t, f)
+	svc := &models.Service{ID: "app", Name: "app", Type: models.ServiceTypeBinary,
+		Command: "/bin/sleep 100", User: "no-such-user-reign-test"}
+	err := e.Start(context.Background(), svc)
+	if err == nil || !strings.Contains(err.Error(), "no-such-user-reign-test") {
+		t.Fatalf("Start with missing user: err = %v, want a lookup error naming the user", err)
+	}
+	if run := systemdRunCmd(f); run != "" {
+		t.Errorf("systemd-run was called despite the missing user:\n%s", run)
 	}
 }

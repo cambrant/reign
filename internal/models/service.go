@@ -3,6 +3,7 @@ package models
 import (
 	"database/sql"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -48,20 +49,39 @@ func ValidPullPolicy(p PullPolicy) bool {
 	return false
 }
 
+// userNamePattern matches the account names useradd accepts by default.
+var userNamePattern = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$`)
+
+// NormalizeUser maps the names that mean "run as root" ("" and "root") to "".
+func NormalizeUser(name string) string {
+	if name == "root" {
+		return ""
+	}
+	return name
+}
+
+// ValidUserName reports whether name is an acceptable account name. Empty
+// means root. It does not check that the account exists.
+func ValidUserName(name string) bool {
+	return name == "" || userNamePattern.MatchString(name)
+}
+
 // Service represents a managed service.
 type Service struct {
-	ID             string      `json:"id"`
-	Name           string      `json:"name"`
-	Type           ServiceType `json:"type"`
-	Path           string      `json:"path"`
-	Command        string      `json:"command,omitempty"`
-	WorkDir        string      `json:"work_dir,omitempty"`
-	EnvFile        string      `json:"env_file,omitempty"`
-	PullPolicy     PullPolicy  `json:"pull_policy,omitempty"`
-	Enabled        bool        `json:"enabled"`
-	Infrastructure bool        `json:"infrastructure"`
-	CreatedAt      time.Time   `json:"created_at"`
-	UpdatedAt      time.Time   `json:"updated_at"`
+	ID         string      `json:"id"`
+	Name       string      `json:"name"`
+	Type       ServiceType `json:"type"`
+	Path       string      `json:"path"`
+	Command    string      `json:"command,omitempty"`
+	WorkDir    string      `json:"work_dir,omitempty"`
+	EnvFile    string      `json:"env_file,omitempty"`
+	PullPolicy PullPolicy  `json:"pull_policy,omitempty"`
+	// User is the account a binary service runs as. Empty means root.
+	User           string    `json:"user,omitempty"`
+	Enabled        bool      `json:"enabled"`
+	Infrastructure bool      `json:"infrastructure"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // ServiceState represents the runtime state of a service.
@@ -95,10 +115,10 @@ type ServiceEvent struct {
 // Create inserts a new service into the database.
 func (s *Service) Create(db *sql.DB) error {
 	query := `
-		INSERT INTO services (id, name, type, path, command, work_dir, env_file, pull_policy, enabled, infrastructure, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		INSERT INTO services (id, name, type, path, command, work_dir, env_file, pull_policy, run_as, enabled, infrastructure, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
 	`
-	_, err := db.Exec(query, s.ID, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.PullPolicy, s.Enabled, s.Infrastructure)
+	_, err := db.Exec(query, s.ID, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.PullPolicy, s.User, s.Enabled, s.Infrastructure)
 	if err != nil {
 		return fmt.Errorf("failed to create service: %w", err)
 	}
@@ -124,10 +144,10 @@ func (s *Service) Create(db *sql.DB) error {
 func (s *Service) Update(db *sql.DB) error {
 	query := `
 		UPDATE services
-		SET name = ?, type = ?, path = ?, command = ?, work_dir = ?, env_file = ?, pull_policy = ?, enabled = ?, infrastructure = ?, updated_at = datetime('now')
+		SET name = ?, type = ?, path = ?, command = ?, work_dir = ?, env_file = ?, pull_policy = ?, run_as = ?, enabled = ?, infrastructure = ?, updated_at = datetime('now')
 		WHERE id = ?
 	`
-	result, err := db.Exec(query, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.PullPolicy, s.Enabled, s.Infrastructure, s.ID)
+	result, err := db.Exec(query, s.Name, s.Type, s.Path, s.Command, s.WorkDir, s.EnvFile, s.PullPolicy, s.User, s.Enabled, s.Infrastructure, s.ID)
 	if err != nil {
 		return fmt.Errorf("failed to update service: %w", err)
 	}
@@ -144,7 +164,7 @@ func (s *Service) Update(db *sql.DB) error {
 }
 
 // serviceColumns is the column list every service query selects, in scanService order.
-const serviceColumns = `id, name, type, path, command, work_dir, env_file, pull_policy, enabled, infrastructure, created_at, updated_at`
+const serviceColumns = `id, name, type, path, command, work_dir, env_file, pull_policy, run_as, enabled, infrastructure, created_at, updated_at`
 
 // rowScanner is the common part of *sql.Row and *sql.Rows.
 type rowScanner interface {
@@ -155,8 +175,8 @@ type rowScanner interface {
 func scanService(row rowScanner) (Service, error) {
 	var s Service
 	var createdAt, updatedAt string
-	var command, workDir, envFile, pullPolicy sql.NullString
-	if err := row.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &pullPolicy,
+	var command, workDir, envFile, pullPolicy, runAs sql.NullString
+	if err := row.Scan(&s.ID, &s.Name, &s.Type, &s.Path, &command, &workDir, &envFile, &pullPolicy, &runAs,
 		&s.Enabled, &s.Infrastructure, &createdAt, &updatedAt); err != nil {
 		return Service{}, err
 	}
@@ -166,6 +186,7 @@ func scanService(row rowScanner) (Service, error) {
 	s.WorkDir = workDir.String
 	s.EnvFile = envFile.String
 	s.PullPolicy = PullPolicy(pullPolicy.String)
+	s.User = runAs.String
 	return s, nil
 }
 
