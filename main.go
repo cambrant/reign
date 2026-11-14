@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/reign/internal/access"
 	"github.com/reign/internal/cli"
 	"github.com/reign/internal/config"
 	"github.com/reign/internal/doctor"
@@ -136,9 +137,24 @@ func main() {
 	mux.Handle("/services/", servicesHandler)
 	mux.Handle("/doctor", handlers.NewDoctorHandler(db, newDoctor(cfg)))
 
+	// Refuse browser-originated requests, and changes from anyone but root
+	// and the admin group.
+	admins := access.NewAdmins(cfg.AdminGroup)
+	if cfg.APIAuth == config.APIAuthNone {
+		logger.Warn("apiAuth is \"none\": anyone who can reach %s can run commands as this user", cfg.ListenAddr)
+	} else if !admins.GroupExists() {
+		logger.Warn("Admin group %q does not exist; only root can change services", cfg.AdminGroup)
+	}
+	api := handlers.NewGuard(mux, handlers.GuardOptions{
+		Admins:       admins,
+		Open:         cfg.APIAuth == config.APIAuthNone,
+		ListenAddr:   cfg.ListenAddr,
+		AllowedHosts: cfg.AllowedHosts,
+	})
+
 	// Create HTTP server
 	server := &http.Server{
-		Handler:     mux,
+		Handler:     api,
 		ReadTimeout: 30 * time.Second,
 		IdleTimeout: 60 * time.Second,
 	}

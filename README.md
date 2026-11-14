@@ -86,6 +86,9 @@ Configuration file (`config.json`):
 | `binaryRunner` | `auto` | How binary services run: `systemd` (transient units), `direct` (child processes), `auto` (systemd if `systemd-run` exists) |
 | `dockerSocket` | `/var/run/docker.sock` | Docker API socket for status checks; empty uses only the docker CLI |
 | `runtimeDir` | `/run/reign` | Short-lived files, e.g. env files handed to transient units |
+| `apiAuth` | `peer` | Who may change services: `peer` allows root and `adminGroup` members, `none` allows anyone who can reach the API |
+| `adminGroup` | `reign` | Group whose members may create, update, delete, start, stop, restart and pull services |
+| `allowedHosts` | `[]` | Extra `Host` header names the API accepts (IP addresses, `localhost`, the listen host and the machine's hostname always work) |
 
 The `REIGN_LOG_LEVEL` environment variable, when set, wins over `logLevel` in
 the file. The effective level and its source are logged at startup
@@ -282,6 +285,34 @@ Runs on the server and reports two things reign cannot see otherwise:
 
 A check that cannot run (Docker unreachable, no unit directory) is reported as
 a warning instead of failing the whole command.
+
+### API Access
+
+reign runs services as root, so being able to create or start a service is
+the same as being root. The API therefore:
+
+- **Rejects browser requests.** Requests with an `Origin` header, a
+  `Sec-Fetch-Site` other than `none`, a `Host` that is not an IP address or a
+  known name (DNS rebinding), or a body that is not `application/json` get
+  `403`. A web page can therefore not drive the API through a browser on the
+  same machine.
+- **Only lets root and the admin group change things.** Every method other
+  than `GET`/`HEAD` needs a caller that is root or in `adminGroup` (default
+  `reign`). The caller is identified by the UID that owns the client socket
+  in `/proc/net/tcp`, so this works for loopback connections on Linux only;
+  anyone else is refused. Reading (`list`, `show`, `logs`, `events`) stays
+  open to local users.
+
+To let a user deploy without sudo:
+
+```bash
+sudo groupadd --system reign
+sudo usermod -aG reign tim   # takes effect at the next login
+```
+
+If the group does not exist, only root can make changes. `"apiAuth": "none"`
+turns the UID check off (for development on macOS, where the UID cannot be
+determined); browser requests are still rejected.
 
 ---
 

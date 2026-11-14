@@ -41,7 +41,22 @@ type Config struct {
 	DockerSocket string `json:"dockerSocket"`
 	// RuntimeDir holds short-lived files such as env files for transient units.
 	RuntimeDir string `json:"runtimeDir"`
+	// APIAuth controls who may change services through the API: "peer"
+	// allows root and AdminGroup members, identified by the UID owning the
+	// loopback client socket; "none" allows anyone who can reach the API.
+	APIAuth string `json:"apiAuth"`
+	// AdminGroup is the group whose members may change services.
+	AdminGroup string `json:"adminGroup"`
+	// AllowedHosts are extra Host header names the API accepts, besides IP
+	// addresses, localhost, the listen host and this machine's hostname.
+	AllowedHosts []string `json:"allowedHosts"`
 }
+
+// API auth modes.
+const (
+	APIAuthPeer = "peer"
+	APIAuthNone = "none"
+)
 
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
@@ -64,6 +79,8 @@ func DefaultConfig() *Config {
 		BinaryRunner:         "auto",
 		RuntimeDir:           "/run/reign",
 		DockerSocket:         "/var/run/docker.sock",
+		APIAuth:              APIAuthPeer,
+		AdminGroup:           "reign",
 	}
 }
 
@@ -224,6 +241,12 @@ func (c *Config) validate() error {
 	case "auto", "systemd", "direct":
 	default:
 		return fmt.Errorf("invalid binaryRunner: %s (must be auto, systemd, or direct)", c.BinaryRunner)
+	}
+
+	switch c.APIAuth {
+	case APIAuthPeer, APIAuthNone:
+	default:
+		return fmt.Errorf("invalid apiAuth: %s (must be peer or none)", c.APIAuth)
 	}
 
 	return nil

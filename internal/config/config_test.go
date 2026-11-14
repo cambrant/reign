@@ -208,6 +208,25 @@ func TestBinaryRunnerValidation(t *testing.T) {
 	}
 }
 
+func TestAPIAuth(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIAuth != APIAuthPeer || cfg.AdminGroup != "reign" {
+		t.Errorf("defaults = apiAuth %q, adminGroup %q, want peer, reign", cfg.APIAuth, cfg.AdminGroup)
+	}
+	for value, wantErr := range map[string]bool{"peer": false, "none": false, "token": true} {
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, []byte(`{"apiAuth":"`+value+`"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); (err != nil) != wantErr {
+			t.Errorf("Load(apiAuth=%q) err = %v, wantErr %v", value, err, wantErr)
+		}
+	}
+}
+
 func TestExternalStopGrace(t *testing.T) {
 	tests := []struct {
 		value   string
