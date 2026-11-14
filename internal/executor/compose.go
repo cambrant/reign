@@ -6,8 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/reign/internal/models"
 )
@@ -30,7 +33,29 @@ func execRunner(ctx context.Context, dir string, name string, args ...string) ([
 // ComposeExecutor executes Docker Compose services.
 type ComposeExecutor struct {
 	run CommandRunner
+
+	// cfgCache holds parsed `compose config` output per project directory,
+	// valid while the directory's files are unchanged.
+	cfgMu    sync.Mutex
+	cfgCache map[string]cachedConfig
 }
+
+// composeConfig is the part of `docker compose config --format json` reign uses.
+type composeConfig struct {
+	Name     string                 `json:"name"`
+	Services map[string]serviceSpec `json:"services"`
+}
+
+// cachedConfig is a parsed compose config and the directory fingerprint it was read under.
+type cachedConfig struct {
+	fingerprint string
+	loadedAt    time.Time
+	cfg         composeConfig
+}
+
+// configMaxAge bounds how long a cached config is trusted even if no file
+// changed, as a safety net for inputs outside the project directory.
+const configMaxAge = 10 * time.Minute
 
 // NewComposeExecutor returns a ComposeExecutor that runs commands via run.
 // A nil run uses the real docker CLI.
@@ -199,15 +224,9 @@ func evaluateStatus(specs map[string]serviceSpec, containers []psEntry) models.S
 func (e *ComposeExecutor) Status(ctx context.Context, service *models.Service) (models.ServiceStatus, error) {
 	run := e.runner()
 
-	cfgOut, cfgErr, err := run(ctx, service.Path, "docker", "compose", "config", "--format", "json")
+	cfg, err := e.config(ctx, service.Path)
 	if err != nil {
-		return "", fmt.Errorf("docker compose config failed: %s: %w", bytes.TrimSpace(cfgErr), err)
-	}
-	var cfg struct {
-		Services map[string]serviceSpec `json:"services"`
-	}
-	if err := json.Unmarshal(cfgOut, &cfg); err != nil {
-		return "", fmt.Errorf("parse compose config: %w", err)
+		return "", err
 	}
 
 	psOut, psErr, err := run(ctx, service.Path, "docker", "compose", "ps", "-a", "--format", "json")
@@ -220,6 +239,62 @@ func (e *ComposeExecutor) Status(ctx context.Context, service *models.Service) (
 	}
 
 	return evaluateStatus(cfg.Services, containers), nil
+}
+
+// config returns the project's parsed compose config. `docker compose config`
+// forks the compose binary and re-reads all YAML and .env files, so the result
+// is cached until a file in the project directory changes (or configMaxAge).
+func (e *ComposeExecutor) config(ctx context.Context, dir string) (composeConfig, error) {
+	fp, fpErr := dirFingerprint(dir)
+	if fpErr == nil {
+		e.cfgMu.Lock()
+		c, ok := e.cfgCache[dir]
+		e.cfgMu.Unlock()
+		if ok && c.fingerprint == fp && time.Since(c.loadedAt) < configMaxAge {
+			return c.cfg, nil
+		}
+	}
+
+	out, errOut, err := e.runner()(ctx, dir, "docker", "compose", "config", "--format", "json")
+	if err != nil {
+		return composeConfig{}, fmt.Errorf("docker compose config failed: %s: %w", bytes.TrimSpace(errOut), err)
+	}
+	var cfg composeConfig
+	if err := json.Unmarshal(out, &cfg); err != nil {
+		return composeConfig{}, fmt.Errorf("parse compose config: %w", err)
+	}
+
+	if fpErr == nil {
+		e.cfgMu.Lock()
+		if e.cfgCache == nil {
+			e.cfgCache = make(map[string]cachedConfig)
+		}
+		e.cfgCache[dir] = cachedConfig{fingerprint: fp, loadedAt: time.Now(), cfg: cfg}
+		e.cfgMu.Unlock()
+	}
+	return cfg, nil
+}
+
+// dirFingerprint summarizes the regular files directly in dir (name, size,
+// mtime). Compose files, overrides and .env live there, so any edit to them
+// changes the fingerprint.
+func dirFingerprint(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "%s|%d|%d\n", entry.Name(), info.Size(), info.ModTime().UnixNano())
+	}
+	return b.String(), nil
 }
 
 // Pull pulls the latest images for a Docker Compose service. It is only run

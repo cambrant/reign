@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/reign/internal/models"
 )
@@ -225,5 +228,48 @@ func TestComposeStartPullPolicy(t *testing.T) {
 				t.Errorf("commands = %q, want only %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestComposeConfigCache(t *testing.T) {
+	dir := t.TempDir()
+	composeFile := filepath.Join(dir, "compose.yml")
+	if err := os.WriteFile(composeFile, []byte("services: {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	configCalls := 0
+	e := NewComposeExecutor(func(ctx context.Context, d, name string, args ...string) ([]byte, []byte, error) {
+		switch strings.Join(args, " ") {
+		case "compose config --format json":
+			configCalls++
+			return []byte(`{"name":"app","services":{"web":{"restart":"always"}}}`), nil, nil
+		case "compose ps -a --format json":
+			return []byte(psLine("web", "running", "", 0, false)), nil, nil
+		}
+		return nil, nil, fmt.Errorf("unexpected %v", args)
+	})
+	svc := &models.Service{ID: "app", Path: dir}
+
+	for i := 0; i < 3; i++ {
+		if _, err := e.Status(context.Background(), svc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if configCalls != 1 {
+		t.Fatalf("compose config ran %d times for an unchanged project, want 1", configCalls)
+	}
+
+	// Editing a file in the project invalidates the cache.
+	later := time.Now().Add(time.Minute)
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("X=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(composeFile, later, later)
+	if _, err := e.Status(context.Background(), svc); err != nil {
+		t.Fatal(err)
+	}
+	if configCalls != 2 {
+		t.Errorf("compose config ran %d times after an edit, want 2", configCalls)
 	}
 }
