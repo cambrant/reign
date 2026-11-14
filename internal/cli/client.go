@@ -396,3 +396,42 @@ func (c *Client) streamSSE(ctx context.Context, path string, onData func(line st
 
 	return scanner.Err()
 }
+
+// DoctorReport lists things on the host that conflict with reign.
+type DoctorReport struct {
+	UnmanagedProjects []DoctorProject `json:"unmanaged_projects"`
+	ConflictingUnits  []DoctorUnit    `json:"conflicting_units"`
+	Warnings          []string        `json:"warnings,omitempty"`
+}
+
+// DoctorProject is a compose project no reign service manages.
+type DoctorProject struct {
+	Name       string `json:"name"`
+	WorkingDir string `json:"working_dir"`
+	Containers int    `json:"containers"`
+	Running    int    `json:"running"`
+}
+
+// DoctorUnit is a systemd unit that runs docker compose for a reign service's path.
+type DoctorUnit struct {
+	Name      string `json:"name"`
+	File      string `json:"file"`
+	ServiceID string `json:"service_id"`
+	Path      string `json:"path"`
+	Enabled   string `json:"enabled"`
+	Active    string `json:"active"`
+	Restarts  int    `json:"restarts"`
+}
+
+// Doctor asks the server to check the host for conflicts.
+func (c *Client) Doctor() (*DoctorReport, error) {
+	data, err := c.doRequest(http.MethodGet, "/doctor", nil)
+	if err != nil {
+		return nil, err
+	}
+	var report DoctorReport
+	if err := json.Unmarshal(data, &report); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+	return &report, nil
+}

@@ -79,14 +79,62 @@ const (
 	labelProject = "com.docker.compose.project"
 	labelService = "com.docker.compose.service"
 	labelOneOff  = "com.docker.compose.oneoff"
+	// labelWorkingDir is the directory compose ran in when it created the container.
+	labelWorkingDir = "com.docker.compose.project.working_dir"
 )
+
+// listComposeContainers lists all compose-managed containers, running or not.
+func (c *DockerClient) listComposeContainers(ctx context.Context) ([]apiContainer, error) {
+	filters, _ := json.Marshal(map[string][]string{"label": {labelProject}})
+	var list []apiContainer
+	if err := c.get(ctx, "/containers/json", url.Values{"all": {"1"}, "filters": {string(filters)}}, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+// ComposeProject summarizes one compose project found on the Docker host.
+type ComposeProject struct {
+	Name       string `json:"name"`
+	WorkingDir string `json:"working_dir"`
+	Containers int    `json:"containers"`
+	Running    int    `json:"running"`
+}
+
+// ComposeProjects lists every compose project with containers on the host,
+// with the working directory compose recorded on its containers.
+func (c *DockerClient) ComposeProjects(ctx context.Context) ([]ComposeProject, error) {
+	list, err := c.listComposeContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]*ComposeProject{}
+	var order []string
+	for _, ac := range list {
+		name := ac.Labels[labelProject]
+		p, ok := byName[name]
+		if !ok {
+			p = &ComposeProject{Name: name, WorkingDir: ac.Labels[labelWorkingDir]}
+			byName[name] = p
+			order = append(order, name)
+		}
+		p.Containers++
+		if ac.State == "running" {
+			p.Running++
+		}
+	}
+	projects := make([]ComposeProject, 0, len(order))
+	for _, name := range order {
+		projects = append(projects, *byName[name])
+	}
+	return projects, nil
+}
 
 // ComposeContainers lists all compose-managed containers (running or not),
 // grouped by compose project name, in one API request.
 func (c *DockerClient) ComposeContainers(ctx context.Context) (map[string][]psEntry, error) {
-	filters, _ := json.Marshal(map[string][]string{"label": {labelProject}})
-	var list []apiContainer
-	if err := c.get(ctx, "/containers/json", url.Values{"all": {"1"}, "filters": {string(filters)}}, &list); err != nil {
+	list, err := c.listComposeContainers(ctx)
+	if err != nil {
 		return nil, err
 	}
 	byProject := make(map[string][]psEntry)

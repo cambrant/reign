@@ -149,3 +149,33 @@ func TestDockerEvents(t *testing.T) {
 		t.Errorf("events = %+v, want %+v", got, want)
 	}
 }
+
+func TestComposeProjects(t *testing.T) {
+	withDir := func(c apiContainer, dir string) apiContainer {
+		c.Labels[labelWorkingDir] = dir
+		return c
+	}
+	var calls int32
+	d := fakeDockerAPI(t, []apiContainer{
+		withDir(apiCtr("conduit", "homeserver", "running", "Up 2 days", false), "/home/tim/conduit"),
+		withDir(apiCtr("app", "web", "running", "Up 1 hour", false), "/srv/app"),
+		withDir(apiCtr("app", "db", "exited", "Exited (0)", false), "/srv/app"),
+	}, &calls)
+
+	got, err := d.ComposeProjects(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ComposeProject{
+		{Name: "conduit", WorkingDir: "/home/tim/conduit", Containers: 1, Running: 1},
+		{Name: "app", WorkingDir: "/srv/app", Containers: 2, Running: 1},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("projects = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("project %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}

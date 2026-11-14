@@ -115,3 +115,55 @@ func TestClientSendsRequester(t *testing.T) {
 		t.Errorf("X-Reign-Requester = %q", got)
 	}
 }
+
+func TestDoctorCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		response string
+		wantErr  bool
+		wantOut  []string
+	}{
+		{
+			name:     "clean host",
+			response: `{"unmanaged_projects":[],"conflicting_units":[]}`,
+			wantOut:  []string{"No problems found."},
+		},
+		{
+			name: "problems found",
+			response: `{"unmanaged_projects":[{"name":"conduit","working_dir":"/home/tim/conduit","containers":1,"running":1}],
+				"conflicting_units":[{"name":"app.service","service_id":"app","path":"/srv/app","enabled":"enabled","active":"failed","restarts":12}]}`,
+			wantErr: true,
+			wantOut: []string{"conduit (/home/tim/conduit): 1/1 containers running", "app.service -> app (/srv/app): enabled, failed, 12 restarts"},
+		},
+		{
+			name:     "warnings only",
+			response: `{"unmanaged_projects":[],"conflicting_units":[],"warnings":["could not list compose projects: refused"]}`,
+			wantOut:  []string{"warning: could not list compose projects", "No problems found."},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/doctor" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Write([]byte(tt.response))
+			}))
+			defer srv.Close()
+
+			var out strings.Builder
+			cmd := NewDoctorCommand(NewClient(srv.URL), false)
+			cmd.out = &out
+			err := cmd.Run()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			for _, w := range tt.wantOut {
+				if !strings.Contains(out.String(), w) {
+					t.Errorf("output %q does not contain %q", out.String(), w)
+				}
+			}
+		})
+	}
+}

@@ -363,6 +363,79 @@ func (c *PullCommand) Run() error {
 	return nil
 }
 
+// DoctorCommand handles the 'doctor' subcommand.
+type DoctorCommand struct {
+	client     *Client
+	jsonOutput bool
+	out        io.Writer
+}
+
+// NewDoctorCommand creates a new doctor command.
+func NewDoctorCommand(client *Client, jsonOutput bool) *DoctorCommand {
+	return &DoctorCommand{client: client, jsonOutput: jsonOutput, out: os.Stdout}
+}
+
+// Run prints the server's report and fails when it found problems.
+func (c *DoctorCommand) Run() error {
+	report, err := c.client.Doctor()
+	if err != nil {
+		return err
+	}
+	if c.jsonOutput {
+		enc := json.NewEncoder(c.out)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(report); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprint(c.out, formatDoctorReport(report))
+	}
+	if n := len(report.UnmanagedProjects) + len(report.ConflictingUnits); n > 0 {
+		return fmt.Errorf("doctor found %d problem(s)", n)
+	}
+	return nil
+}
+
+// formatDoctorReport renders a report for the terminal.
+func formatDoctorReport(r *DoctorReport) string {
+	var b strings.Builder
+	if len(r.UnmanagedProjects) > 0 {
+		b.WriteString("Compose projects not managed by reign:\n")
+		for _, p := range r.UnmanagedProjects {
+			fmt.Fprintf(&b, "  %s (%s): %d/%d containers running\n", p.Name, p.WorkingDir, p.Running, p.Containers)
+		}
+	}
+	if len(r.ConflictingUnits) > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("systemd units running docker compose for a reign service:\n")
+		for _, u := range r.ConflictingUnits {
+			fmt.Fprintf(&b, "  %s -> %s (%s): %s\n", u.Name, u.ServiceID, u.Path, describeUnitState(u))
+		}
+		b.WriteString("Disable them with 'systemctl disable --now <unit>' so they do not fight reign.\n")
+	}
+	for _, w := range r.Warnings {
+		fmt.Fprintf(&b, "warning: %s\n", w)
+	}
+	if len(r.UnmanagedProjects)+len(r.ConflictingUnits) == 0 {
+		b.WriteString("No problems found.\n")
+	}
+	return b.String()
+}
+
+// describeUnitState summarizes a unit's state, e.g. "enabled, failed, 12 restarts".
+func describeUnitState(u DoctorUnit) string {
+	if u.Enabled == "" && u.Active == "" {
+		return "state unknown"
+	}
+	s := u.Enabled + ", " + u.Active
+	if u.Restarts > 0 {
+		s += fmt.Sprintf(", %d restarts", u.Restarts)
+	}
+	return s
+}
+
 // CreateCommand handles the 'create' subcommand.
 type CreateCommand struct {
 	client  *Client

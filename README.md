@@ -120,6 +120,7 @@ The `reign` binary acts as both the server and the CLI client. When invoked with
 | `logs` | | View service logs |
 | `enable` | | Enable a service |
 | `disable` | | Disable a service |
+| `doctor` | | Find compose projects and systemd units that conflict with reign |
 | `serve` | | Start the server (default) |
 | `help` | | Show help for a command |
 | `version` | | Show version |
@@ -261,6 +262,27 @@ attributed to `reign (startup)`, `reign (health check)`, `reign (auto-restart)`
 or `reign (shutdown)`. Start, stop, restart and delete requests are also logged
 with their requester in the server log (journald).
 
+### Doctor
+
+```bash
+reign doctor                  # human-readable report, exits 1 on findings
+reign doctor --json
+```
+
+Runs on the server and reports two things reign cannot see otherwise:
+
+- **Unmanaged compose projects**: projects with containers on the host whose
+  working directory (the `com.docker.compose.project.working_dir` label) is not
+  the path of any reign compose service. Needs `docker_socket`.
+- **Conflicting systemd units**: `.service` files in `/etc/systemd/system` whose
+  `Exec*` lines run `docker compose` (or `docker-compose`) and that mention a
+  reign-managed path. Each is shown with its boot enablement, active state and
+  restart count, so a unit that fights reign in a crash loop stands out. Disable
+  it with `systemctl disable --now <unit>`.
+
+A check that cannot run (Docker unreachable, no unit directory) is reported as
+a warning instead of failing the whole command.
+
 ---
 
 ## API Reference
@@ -374,6 +396,15 @@ POST /services/{id}/pull
 ```
 
 Pulls a compose service's images synchronously without restarting it.
+
+### Doctor
+
+```bash
+GET /doctor
+```
+
+Returns `unmanaged_projects`, `conflicting_units` and `warnings`; see
+[Doctor](#doctor).
 
 ### Service Logs
 

@@ -73,6 +73,8 @@ func Run(args []string) (bool, error) {
 		return true, runEnableCommand(args[2:])
 	case "disable":
 		return true, runDisableCommand(args[2:])
+	case "doctor":
+		return true, runDoctorCommand(args[2:])
 	case "help":
 		return true, runHelpCommand(args[2:])
 	case "version":
@@ -217,6 +219,23 @@ func runPullCommand(args []string) error {
 	}
 
 	return NewPullCommand(NewClient(addr), fs.Arg(0)).Run()
+}
+
+func runDoctorCommand(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
+	jsonOutput := fs.Bool("json", false, "Output in JSON format")
+	fs.Parse(args)
+
+	addr := *server
+	if addr == "" {
+		addr = os.Getenv("REIGN_SERVER")
+	}
+	if addr == "" {
+		addr = defaultServerAddr
+	}
+
+	return NewDoctorCommand(NewClient(addr), *jsonOutput).Run()
 }
 
 func runCreateCommand(args []string) error {
@@ -524,6 +543,8 @@ func runHelpCommand(args []string) error {
 			printRestartHelp()
 		case "pull":
 			printPullHelp()
+		case "doctor":
+			printDoctorHelp()
 		case "delete", "rm", "remove":
 			printDeleteHelp()
 		case "logs":
@@ -563,6 +584,7 @@ Commands:
   events          View event log across all services
   enable          Enable a service
   disable         Disable a service
+  doctor          Find compose projects and systemd units that conflict with reign
   help            Show help for a command
   version         Show version information
 
@@ -744,6 +766,28 @@ Options:
 
 Examples:
   reign pull myservice && reign restart myservice
+`)
+}
+
+func printDoctorHelp() {
+	fmt.Print(`Usage: reign doctor [options]
+
+Check the host for things reign should know about:
+
+  - running compose projects whose working directory is not the path of any
+    reign service (from the com.docker.compose.project.working_dir label)
+  - systemd units in /etc/systemd/system that run docker compose for a path
+    reign manages, with whether they start at boot and how often they restarted
+
+The check runs on the reign server. It exits non-zero when it finds problems.
+
+Options:
+  --server    Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
+  --json      Output in JSON format
+
+Examples:
+  reign doctor
+  reign doctor --json
 `)
 }
 

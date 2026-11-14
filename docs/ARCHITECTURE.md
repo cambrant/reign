@@ -74,12 +74,16 @@ reign/
     │   ├── compose.go          # Docker Compose executor
     │   ├── binary.go           # Native binary executor
     │   └── executor_test.go    # Executor tests
+    ├── doctor/                 # Host checks behind GET /doctor
+    │   ├── doctor.go           # Unmanaged compose projects, conflicting units
+    │   └── doctor_test.go
     ├── orchestrator/           # Core orchestration logic
     │   ├── orchestrator.go     # Service lifecycle management
     │   └── orchestrator_test.go
     └── handlers/               # HTTP handlers
         ├── health.go           # Health check endpoint
         ├── services.go         # Service management endpoints
+        ├── doctor.go           # GET /doctor
         └── handlers_test.go    # Handler tests
 ```
 
@@ -180,6 +184,22 @@ Core service lifecycle management:
 ### Handlers (`internal/handlers/`)
 
 HTTP handlers for the REST API. Uses standard `net/http`.
+
+### Doctor (`internal/doctor/`)
+
+Finds things on the host that compete with reign. It is read-only and runs on
+request (`GET /doctor`, `reign doctor`), not in the health loop.
+
+- Lists compose projects through the Docker API (`DockerClient.ComposeProjects`,
+  one `/containers/json` call) and reports those whose
+  `com.docker.compose.project.working_dir` does not match any compose service
+  `Path`. Paths are cleaned and symlinks resolved before comparing.
+- Scans `.service` files in `/etc/systemd/system` (skipping `reign*`) for
+  `Exec*` lines that run `docker compose`/`docker-compose` and a whole-path
+  mention of a reign-managed path (longest path first, so `/srv/app-db` is not
+  taken for `/srv/app`). Matches get `UnitFileState`, `ActiveState` and
+  `NRestarts` from one `systemctl show` call.
+- Each check degrades to a warning when it cannot run.
 
 ---
 

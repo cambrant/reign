@@ -125,6 +125,7 @@ Potential features for managing service configurations:
 - [ ] Environment variable injection
 - [ ] Secrets management integration (Vault, etc.)
 - [ ] Configuration drift detection
+- [x] `reign doctor`: unmanaged compose projects and leftover systemd units for reign paths
 
 ### Backup and Restore
 

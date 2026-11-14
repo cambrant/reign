@@ -8,12 +8,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"github.com/reign/internal/cli"
 	"github.com/reign/internal/config"
+	"github.com/reign/internal/doctor"
+	"github.com/reign/internal/executor"
 	"github.com/reign/internal/handlers"
 	"github.com/reign/internal/logger"
 	"github.com/reign/internal/models"
@@ -131,6 +134,7 @@ func main() {
 	mux.Handle("/events", eventsHandler)
 	mux.Handle("/services", servicesHandler)
 	mux.Handle("/services/", servicesHandler)
+	mux.Handle("/doctor", handlers.NewDoctorHandler(db, newDoctor(cfg)))
 
 	// Create HTTP server
 	server := &http.Server{
@@ -254,4 +258,17 @@ func streamEvents(w http.ResponseWriter, r *http.Request, db *sql.DB, initialLim
 			}
 		}
 	}
+}
+
+// newDoctor builds the host checker behind GET /doctor.
+func newDoctor(cfg *config.Config) *doctor.Doctor {
+	d := &doctor.Doctor{
+		Run: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return exec.CommandContext(ctx, name, args...).Output()
+		},
+	}
+	if cfg.DockerSocket != "" {
+		d.Projects = executor.NewDockerClient(cfg.DockerSocket)
+	}
+	return d
 }
