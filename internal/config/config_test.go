@@ -235,3 +235,38 @@ func TestExternalStopGrace(t *testing.T) {
 		})
 	}
 }
+
+func TestLogLevelPrecedence(t *testing.T) {
+	tests := []struct {
+		name       string
+		file       string
+		env        string
+		wantLevel  string
+		wantSource string
+		wantErr    bool
+	}{
+		{"default", `{}`, "", "info", "default", false},
+		{"config file", `{"logLevel":"warn"}`, "", "warn", "config", false},
+		{"environment wins over file", `{"logLevel":"info"}`, "debug", "debug", LogLevelEnv, false},
+		{"invalid environment value", `{}`, "loud", "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(LogLevelEnv, tt.env)
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(tt.file), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if cfg.LogLevel != tt.wantLevel || cfg.LogLevelSource != tt.wantSource {
+				t.Errorf("log level = %s from %s, want %s from %s", cfg.LogLevel, cfg.LogLevelSource, tt.wantLevel, tt.wantSource)
+			}
+		})
+	}
+}

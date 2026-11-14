@@ -36,6 +36,8 @@ type Orchestrator struct {
 	// noticed. They are restarted once ExternalStopGrace has passed, unless
 	// they come back on their own or are started or stopped through reign.
 	externalStops map[string]time.Time
+	// gaveUp marks services at MaxRestarts that were already reported.
+	gaveUp map[string]bool
 
 	// serviceLocks serialize lifecycle operations per service, so concurrent
 	// restarts (or a restart racing the health check) cannot interleave.
@@ -77,6 +79,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		stopChan:        make(chan struct{}),
 		pendingRestarts: make(map[string]bool),
 		externalStops:   make(map[string]time.Time),
+		gaveUp:          make(map[string]bool),
 		serviceLocks:    make(map[string]*sync.Mutex),
 		restartPause:    time.Second,
 		observed:        make(map[string]Observation),
@@ -1002,9 +1005,19 @@ func (o *Orchestrator) maybeScheduleRestart(ctx context.Context, service models.
 		return
 	}
 	if state.RestartCount >= o.config.MaxRestarts {
-		logger.Debug("Service %s reached max restarts (%d), not restarting", service.ID, o.config.MaxRestarts)
+		// Say so once per run of failures, not on every health tick.
+		o.pendingMu.Lock()
+		first := !o.gaveUp[service.ID]
+		o.gaveUp[service.ID] = true
+		o.pendingMu.Unlock()
+		if first {
+			logger.Warn("Service %s reached max restarts (%d), not restarting until started manually", service.ID, o.config.MaxRestarts)
+		}
 		return
 	}
+	o.pendingMu.Lock()
+	delete(o.gaveUp, service.ID)
+	o.pendingMu.Unlock()
 
 	o.pendingMu.Lock()
 	if o.pendingRestarts[service.ID] {

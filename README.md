@@ -81,11 +81,16 @@ Configuration file (`config.json`):
 |-------|---------|-------------|
 | `listenAddr` | `127.0.0.1:7890` | HTTP API listen address |
 | `databasePath` | `/var/lib/reign/reign.db` | SQLite database location |
-| `logLevel` | `info` | Log level: debug, info, warn, error |
+| `logLevel` | `info` | Log level: debug, info, warn, error (overridden by `REIGN_LOG_LEVEL`) |
 | `externalStopGrace` | `1h` | How long a service stopped outside reign stays down before reign restarts it; `0` never restarts it |
 | `binaryRunner` | `auto` | How binary services run: `systemd` (transient units), `direct` (child processes), `auto` (systemd if `systemd-run` exists) |
 | `dockerSocket` | `/var/run/docker.sock` | Docker API socket for status checks; empty uses only the docker CLI |
 | `runtimeDir` | `/run/reign` | Short-lived files, e.g. env files handed to transient units |
+
+The `REIGN_LOG_LEVEL` environment variable, when set, wins over `logLevel` in
+the file. The effective level and its source are logged at startup
+(`Log level: info (from config)`), so a stray `Environment=REIGN_LOG_LEVEL=debug`
+in a unit file is easy to spot.
 
 ---
 

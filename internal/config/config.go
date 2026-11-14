@@ -11,9 +11,12 @@ import (
 
 // Config holds all configuration for Reign.
 type Config struct {
-	ListenAddr          string        `json:"listenAddr"`
-	DatabasePath        string        `json:"databasePath"`
-	LogLevel            string        `json:"logLevel"`
+	ListenAddr   string `json:"listenAddr"`
+	DatabasePath string `json:"databasePath"`
+	LogLevel     string `json:"logLevel"`
+	// LogLevelSource says where LogLevel came from: "default", "config" or
+	// "REIGN_LOG_LEVEL" (the environment variable wins over the file).
+	LogLevelSource      string        `json:"-"`
 	StartupTimeout      time.Duration `json:"-"`
 	StartupTimeoutStr   string        `json:"startupTimeout"`
 	HealthCheckInterval time.Duration `json:"-"`
@@ -74,12 +77,20 @@ func ParseFlags() (configPath string, showVersion bool) {
 	return configPath, showVersion
 }
 
-// Load reads configuration from a file, applying defaults for unspecified fields.
+// LogLevelEnv overrides the configured log level when set.
+const LogLevelEnv = "REIGN_LOG_LEVEL"
+
+// Load reads configuration from a file, applying defaults for unspecified
+// fields. REIGN_LOG_LEVEL, when set, overrides the file's logLevel.
 func Load(path string) (*Config, error) {
 	config := DefaultConfig()
+	config.LogLevelSource = "default"
 
 	// If no config file specified, use defaults
 	if path == "" {
+		if err := config.applyEnv(); err != nil {
+			return nil, err
+		}
 		return config, nil
 	}
 
@@ -90,8 +101,16 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Unmarshal into existing config (overrides defaults)
+	defaultLevel := config.LogLevel
 	if err := json.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+	if config.LogLevel != defaultLevel {
+		config.LogLevelSource = "config"
+	}
+
+	if err := config.applyEnv(); err != nil {
+		return nil, err
 	}
 
 	// Parse duration strings
@@ -105,6 +124,22 @@ func Load(path string) (*Config, error) {
 	}
 
 	return config, nil
+}
+
+// applyEnv applies environment overrides. An explicitly set environment
+// variable wins over the file, as for any other tool; the source is kept so
+// startup can log which one is in effect.
+func (c *Config) applyEnv() error {
+	if level := os.Getenv(LogLevelEnv); level != "" {
+		c.LogLevel = level
+		c.LogLevelSource = LogLevelEnv
+		switch level {
+		case "debug", "info", "warn", "error":
+		default:
+			return fmt.Errorf("invalid %s: %s (must be debug, info, warn, or error)", LogLevelEnv, level)
+		}
+	}
+	return nil
 }
 
 // parseDurations converts string duration fields to time.Duration.

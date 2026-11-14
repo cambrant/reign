@@ -52,6 +52,7 @@ func main() {
 	}
 
 	logger.Info("Starting %s", version.Get())
+	logger.Info("Log level: %s (from %s)", cfg.LogLevel, cfg.LogLevelSource)
 	logger.Info("Listening on %s", cfg.ListenAddr)
 	logger.Info("Database: %s", cfg.DatabasePath)
 
