@@ -100,27 +100,39 @@ func loopbackPeerUID(remoteAddr, localAddr string) (int, bool) {
 
 // findSocketUID scans /proc/net/tcp-format content for the socket whose local
 // address is the client (remote) and whose peer is the server (local).
+//
+// The UID decides who may change services, so only a live socket counts: the
+// row must be ESTABLISHED (state 01) and belong to a real socket (non-zero
+// inode). TIME_WAIT and other kernel-held rows report uid 0 and must never
+// make a caller look like root. More than one candidate row is ambiguous and
+// identifies nobody.
 func findSocketUID(table string, client, server *net.TCPAddr) (int, bool) {
+	found := false
+	uid := 0
 	for _, line := range strings.Split(table, "\n")[1:] {
 		fields := strings.Fields(line)
-		if len(fields) < 8 {
+		if len(fields) < 10 {
+			continue
+		}
+		if fields[3] != tcpEstablished || fields[9] == "0" {
 			continue
 		}
 		l, ok1 := parseProcAddr(fields[1])
 		r, ok2 := parseProcAddr(fields[2])
-		if !ok1 || !ok2 {
+		if !ok1 || !ok2 || !sameAddr(l, client) || !sameAddr(r, server) {
 			continue
 		}
-		if sameAddr(l, client) && sameAddr(r, server) {
-			uid, err := strconv.Atoi(fields[7])
-			if err != nil {
-				return 0, false
-			}
-			return uid, true
+		u, err := strconv.Atoi(fields[7])
+		if err != nil || found {
+			return 0, false
 		}
+		found, uid = true, u
 	}
-	return 0, false
+	return uid, found
 }
+
+// tcpEstablished is TCP_ESTABLISHED as written in /proc/net/tcp.
+const tcpEstablished = "01"
 
 func sameAddr(a, b *net.TCPAddr) bool {
 	return a.Port == b.Port && a.IP.Equal(b.IP)
