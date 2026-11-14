@@ -52,7 +52,8 @@ type BinaryExecutor struct {
 	stopTimeout time.Duration // systemd mode: TimeoutStopSec of the unit
 
 	mu        sync.Mutex
-	processes map[string]*os.Process // direct mode, keyed by service name
+	processes map[string]*os.Process      // direct mode, keyed by service name
+	lastExit  map[string]*os.ProcessState // direct mode: how each service last exited
 }
 
 var binaryExecutor = &BinaryExecutor{
@@ -401,6 +402,7 @@ func (e *BinaryExecutor) startDirect(service *models.Service, args []string, dir
 		cmd.Wait()
 		e.mu.Lock()
 		delete(e.processes, service.Name)
+		e.recordExit(service.Name, cmd.ProcessState)
 		e.mu.Unlock()
 	}()
 

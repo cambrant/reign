@@ -207,3 +207,31 @@ func TestBinaryRunnerValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestExternalStopGrace(t *testing.T) {
+	tests := []struct {
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"0", 0, false},
+		{"15m", 15 * time.Minute, false},
+		{"-1m", 0, true},
+		{"soon", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, []byte(`{"externalStopGrace":"`+tt.value+`"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && cfg.ExternalStopGrace != tt.want {
+				t.Errorf("ExternalStopGrace = %s, want %s", cfg.ExternalStopGrace, tt.want)
+			}
+		})
+	}
+}

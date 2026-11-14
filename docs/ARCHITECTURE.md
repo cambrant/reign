@@ -317,9 +317,20 @@ Response includes:
 
 ### Restart Policy
 
-When a Docker Compose project fails:
+When a service that should run is found down, the executor's `StopCause`
+decides between a crash and an external stop (compose: removed containers,
+`docker inspect` for `OOMKilled`, and `docker events` for `stop`/`kill` since
+the last start; systemd units: `ActiveState`/`Result`; direct mode: the
+child's exit status).
+
+An external stop marks the service `stopped`, logs `stopped_externally`, and
+starts a grace period (`externalStopGrace`, default 1h, kept in memory). The
+service is restarted after it unless it comes back by itself (`resumed`) or is
+started or stopped through reign. With `externalStopGrace` 0 it stays stopped.
+
+When a service crashes:
 1. Mark service as `failed`
-2. Log the failure with details
+2. Log the failure with details (exit codes, OOMKilled)
 3. After configurable delay (default: 30s), attempt restart
 4. Track restart count
 5. After max restarts (default: 5), leave in `failed` state

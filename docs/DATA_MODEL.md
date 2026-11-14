@@ -204,7 +204,9 @@ Standard event types for the audit log:
 | `started` | Service successfully started |
 | `stopping` | Service stop initiated |
 | `stopped` | Service successfully stopped |
-| `failed` | Service failed to start or crashed |
+| `failed` | Service failed to start or crashed (message has exit codes, `OOMKilled=true` for OOM kills) |
+| `stopped_externally` | Service was stopped outside reign (docker stop, compose down, systemctl stop) |
+| `resumed` | A service stopped outside reign is running again |
 | `restarted` | Automatic restart triggered |
 | `pulled` | Docker images were pulled (`reign pull` / `restart --pull`) |
 | `pull_failed` | An explicit image pull failed |

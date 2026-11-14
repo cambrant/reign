@@ -82,6 +82,7 @@ Configuration file (`config.json`):
 | `listenAddr` | `127.0.0.1:7890` | HTTP API listen address |
 | `databasePath` | `/var/lib/reign/reign.db` | SQLite database location |
 | `logLevel` | `info` | Log level: debug, info, warn, error |
+| `externalStopGrace` | `1h` | How long a service stopped outside reign stays down before reign restarts it; `0` never restarts it |
 | `binaryRunner` | `auto` | How binary services run: `systemd` (transient units), `direct` (child processes), `auto` (systemd if `systemd-run` exists) |
 | `runtimeDir` | `/run/reign` | Short-lived files, e.g. env files handed to transient units |
 
@@ -388,6 +389,27 @@ binary service runs in its own transient unit, `reign-<id>.service`:
 
 With `direct`, binary services are child processes of reign and are killed
 when reign restarts (systemd's default `KillMode=control-group`).
+
+## Crashes and External Stops
+
+The health check tells a crash from a stop made outside reign:
+
+| Situation | Classified as |
+|-----------|---------------|
+| Container OOM killed (`OOMKilled=true`), unit `Result=oom-kill` | crash (OOM) |
+| Containers removed (`docker compose down`, `docker rm`) | external stop |
+| A `stop`/`kill` request reached the Docker API since the last start (`docker stop`, `docker compose stop`) | external stop |
+| Binary unit gone after a clean exit (`systemctl stop`, `kill`, exit 0) | external stop |
+| Anything else (non-zero exit, unit `failed`) | crash |
+
+A crash is logged as `failed` with the exit codes (and `OOMKilled=true` for OOM
+kills) and restarted with backoff as before. An external stop is logged as
+`stopped_externally`, the service is marked `stopped`, and reign waits
+`externalStopGrace` before restarting it, so a cold backup with
+`docker compose stop` is not undone 30 seconds later. If the service comes back
+on its own (`docker compose start`), reign logs `resumed` and marks it running.
+`reign start` or `reign stop` ends the wait. The wait is kept in memory only:
+after a reign restart, a stopped service stays stopped until started.
 
 ---
 

@@ -32,6 +32,10 @@ type Orchestrator struct {
 	// so repeated health checks don't stack up restarts for the same service.
 	pendingMu       sync.Mutex
 	pendingRestarts map[string]bool
+	// externalStops holds services stopped outside reign, with the time it was
+	// noticed. They are restarted once ExternalStopGrace has passed, unless
+	// they come back on their own or are started or stopped through reign.
+	externalStops map[string]time.Time
 }
 
 const (
@@ -55,6 +59,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		startedAt:       time.Now(),
 		stopChan:        make(chan struct{}),
 		pendingRestarts: make(map[string]bool),
+		externalStops:   make(map[string]time.Time),
 	}
 }
 
@@ -263,6 +268,7 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 	}
 
 	logger.Info("Starting service: %s%s", id, byRequester(ctx))
+	o.clearExternalStop(id)
 
 	// Update status to starting
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStarting); err != nil {
@@ -318,6 +324,7 @@ func (o *Orchestrator) StopService(ctx context.Context, id string) error {
 	}
 
 	logger.Info("Stopping service: %s%s", id, byRequester(ctx))
+	o.clearExternalStop(id)
 
 	// Update status to stopping
 	if err := models.UpdateServiceStatus(o.db, id, models.StatusStopping); err != nil {
@@ -384,6 +391,7 @@ func (o *Orchestrator) StartServiceAsync(ctx context.Context, id string) (*model
 	}
 	o.logEvent(ctx, id, "starting", "Service start initiated")
 	logger.Info("Starting service: %s%s", id, byRequester(ctx))
+	o.clearExternalStop(id)
 	models.ResetRestartCount(o.db, id)
 
 	// Build the response before launching the goroutine to avoid races
@@ -447,6 +455,7 @@ func (o *Orchestrator) StopServiceAsync(ctx context.Context, id string) (*models
 	}
 	o.logEvent(ctx, id, "stopping", "Service stop initiated")
 	logger.Info("Stopping service: %s%s", id, byRequester(ctx))
+	o.clearExternalStop(id)
 
 	// Build the response before launching the goroutine to avoid races
 	result := &models.ServiceWithState{Service: *service}
@@ -711,6 +720,8 @@ func (o *Orchestrator) runHealthChecks(ctx context.Context) {
 		switch state.Status {
 		case models.StatusRunning:
 			o.checkRunningService(ctx, service, state)
+		case models.StatusStopped:
+			o.checkExternallyStopped(ctx, service, state)
 		case models.StatusFailed:
 			// A failed start (e.g. a transient docker error) is retried too,
 			// not only services that die while running.
@@ -743,14 +754,119 @@ func (o *Orchestrator) checkRunningService(ctx context.Context, service models.S
 		}
 	case models.StatusStopped, models.StatusFailed:
 		logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
-		if err := models.SetServiceFailed(o.db, service.ID, "service stopped unexpectedly"); err != nil {
+		cause := o.stopCause(ctx, &service, state)
+		if cause.External {
+			o.handleExternalStop(ctx, service, cause)
+			return
+		}
+		msg := "Service stopped unexpectedly: " + cause.Detail
+		if err := models.SetServiceFailed(o.db, service.ID, msg); err != nil {
 			logger.Error("Failed to update status for %s: %v", service.ID, err)
 		}
-		o.logEvent(ctx, service.ID, "failed", "Service stopped unexpectedly")
+		o.logEvent(ctx, service.ID, "failed", msg)
 		o.maybeScheduleRestart(ctx, service, state)
 	default:
 		logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
 	}
+}
+
+// stopCause asks the executor why a service is down. When that cannot be
+// determined, the stop is treated as a crash, which is the safe default.
+func (o *Orchestrator) stopCause(ctx context.Context, service *models.Service, state *models.ServiceState) executor.StopCause {
+	causer, ok := o.getExecutor(service.Type).(executor.StopCauser)
+	if !ok {
+		return executor.StopCause{Detail: "stopped unexpectedly"}
+	}
+	since := time.Now().Add(-time.Hour)
+	if state.StartedAt != nil {
+		since = *state.StartedAt
+	}
+	cause, err := causer.StopCause(ctx, service, since)
+	if err != nil {
+		logger.Debug("Could not determine why %s stopped: %v", service.ID, err)
+		return executor.StopCause{Detail: "stopped unexpectedly"}
+	}
+	return cause
+}
+
+// handleExternalStop records a stop made outside reign. The service is marked
+// stopped and, unless ExternalStopGrace is 0, restarted once the grace period
+// has passed without it coming back (e.g. after a cold backup).
+func (o *Orchestrator) handleExternalStop(ctx context.Context, service models.Service, cause executor.StopCause) {
+	grace := o.config.ExternalStopGrace
+	msg := "Service " + cause.Detail
+	if grace > 0 && service.Enabled {
+		msg += fmt.Sprintf("; restarting in %s unless it is started again", grace)
+	} else {
+		msg += "; not restarting automatically"
+	}
+	logger.Warn("%s: %s", service.ID, msg)
+
+	if err := models.SetServiceStoppedExternally(o.db, service.ID, cause.Detail); err != nil {
+		logger.Error("Failed to update status for %s: %v", service.ID, err)
+	}
+	o.logEvent(ctx, service.ID, "stopped_externally", msg)
+
+	if grace > 0 && service.Enabled {
+		o.pendingMu.Lock()
+		o.externalStops[service.ID] = time.Now()
+		o.pendingMu.Unlock()
+	}
+}
+
+// checkExternallyStopped follows a service that was stopped outside reign:
+// it is marked running again if it came back, and restarted once the grace
+// period is over.
+func (o *Orchestrator) checkExternallyStopped(ctx context.Context, service models.Service, state *models.ServiceState) {
+	o.pendingMu.Lock()
+	since, watched := o.externalStops[service.ID]
+	o.pendingMu.Unlock()
+	if !watched {
+		return
+	}
+
+	exec := o.getExecutor(service.Type)
+	if exec == nil {
+		return
+	}
+	actual, err := exec.Status(ctx, &service)
+	if err != nil {
+		logger.Debug("Failed to get status for %s: %v", service.ID, err)
+		return
+	}
+
+	if actual == models.StatusRunning {
+		o.clearExternalStop(service.ID)
+		var pid *int
+		if service.Type == models.ServiceTypeBinary {
+			pid = o.binaryExecutor.GetPID(ctx, &service)
+		}
+		if err := models.SetServiceStarted(o.db, service.ID, pid); err != nil {
+			logger.Error("Failed to update status for %s: %v", service.ID, err)
+		}
+		o.logEvent(ctx, service.ID, "resumed", "Service is running again after being stopped outside reign")
+		return
+	}
+
+	if time.Since(since) < o.config.ExternalStopGrace {
+		return
+	}
+	o.clearExternalStop(service.ID)
+	msg := fmt.Sprintf("Service still down %s after being stopped outside reign", o.config.ExternalStopGrace)
+	logger.Warn("%s: %s", service.ID, msg)
+	if err := models.SetServiceFailed(o.db, service.ID, msg); err != nil {
+		logger.Error("Failed to update status for %s: %v", service.ID, err)
+	}
+	o.logEvent(ctx, service.ID, "failed", msg)
+	o.maybeScheduleRestart(ctx, service, state)
+}
+
+// clearExternalStop forgets a service's external stop, e.g. when it is
+// started or stopped through reign.
+func (o *Orchestrator) clearExternalStop(id string) {
+	o.pendingMu.Lock()
+	delete(o.externalStops, id)
+	o.pendingMu.Unlock()
 }
 
 // maybeScheduleRestart schedules an automatic restart if the service is enabled,

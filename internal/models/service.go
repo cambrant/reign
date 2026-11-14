@@ -313,6 +313,18 @@ func SetServiceStopped(db *sql.DB, serviceID string) error {
 	return err
 }
 
+// SetServiceStoppedExternally marks a service as stopped by something other
+// than reign, keeping the reason in last_error.
+func SetServiceStoppedExternally(db *sql.DB, serviceID string, reason string) error {
+	query := `
+		UPDATE service_state
+		SET status = 'stopped', pid = NULL, stopped_at = datetime('now'), last_error = ?, updated_at = datetime('now')
+		WHERE service_id = ?
+	`
+	_, err := db.Exec(query, reason, serviceID)
+	return err
+}
+
 // SetServiceFailed marks a service as failed with an error message.
 func SetServiceFailed(db *sql.DB, serviceID string, errMsg string) error {
 	query := `

@@ -24,6 +24,11 @@ type Config struct {
 	ShutdownTimeout     time.Duration `json:"-"`
 	ShutdownTimeoutStr  string        `json:"shutdownTimeout"`
 	KeepRunning         bool          `json:"keepRunning"`
+	// ExternalStopGrace is how long a service stopped outside reign (docker
+	// stop, systemctl stop) stays down before reign restarts it. 0 disables
+	// automatic restarts after external stops.
+	ExternalStopGrace    time.Duration `json:"-"`
+	ExternalStopGraceStr string        `json:"externalStopGrace"`
 	// BinaryRunner selects how binary services run: "systemd" (each in its own
 	// transient unit, survives reign restarts), "direct" (child processes of
 	// reign), or "auto" (systemd when systemd-run is available).
@@ -35,21 +40,23 @@ type Config struct {
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
-		ListenAddr:          "127.0.0.1:7890",
-		DatabasePath:        "/var/lib/reign/reign.db",
-		LogLevel:            "info",
-		StartupTimeout:      5 * time.Minute,
-		StartupTimeoutStr:   "5m",
-		HealthCheckInterval: 30 * time.Second,
-		HealthCheckStr:      "30s",
-		RestartDelay:        30 * time.Second,
-		RestartDelayStr:     "30s",
-		MaxRestarts:         5,
-		ShutdownTimeout:     30 * time.Second,
-		ShutdownTimeoutStr:  "30s",
-		KeepRunning:         true,
-		BinaryRunner:        "auto",
-		RuntimeDir:          "/run/reign",
+		ListenAddr:           "127.0.0.1:7890",
+		DatabasePath:         "/var/lib/reign/reign.db",
+		LogLevel:             "info",
+		StartupTimeout:       5 * time.Minute,
+		StartupTimeoutStr:    "5m",
+		HealthCheckInterval:  30 * time.Second,
+		HealthCheckStr:       "30s",
+		RestartDelay:         30 * time.Second,
+		RestartDelayStr:      "30s",
+		MaxRestarts:          5,
+		ShutdownTimeout:      30 * time.Second,
+		ShutdownTimeoutStr:   "30s",
+		KeepRunning:          true,
+		ExternalStopGrace:    time.Hour,
+		ExternalStopGraceStr: "1h",
+		BinaryRunner:         "auto",
+		RuntimeDir:           "/run/reign",
 	}
 }
 
@@ -121,6 +128,13 @@ func (c *Config) parseDurations() error {
 		}
 	}
 
+	if c.ExternalStopGraceStr != "" {
+		c.ExternalStopGrace, err = time.ParseDuration(c.ExternalStopGraceStr)
+		if err != nil {
+			return fmt.Errorf("invalid externalStopGrace: %w", err)
+		}
+	}
+
 	if c.ShutdownTimeoutStr != "" {
 		c.ShutdownTimeout, err = time.ParseDuration(c.ShutdownTimeoutStr)
 		if err != nil {
@@ -161,6 +175,10 @@ func (c *Config) validate() error {
 
 	if c.MaxRestarts < 0 {
 		return fmt.Errorf("maxRestarts cannot be negative")
+	}
+
+	if c.ExternalStopGrace < 0 {
+		return fmt.Errorf("externalStopGrace cannot be negative")
 	}
 
 	switch c.BinaryRunner {

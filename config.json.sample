@@ -7,5 +7,6 @@
   "restartDelay": "30s",
   "maxRestarts": 5,
   "shutdownTimeout": "30s",
-  "binaryRunner": "auto"
+  "binaryRunner": "auto",
+  "externalStopGrace": "1h"
 }
