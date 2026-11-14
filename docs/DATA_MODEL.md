@@ -8,6 +8,14 @@ This document describes the data structures and database schema used by Reign.
 
 Reign uses SQLite for persistent storage. The database is stored at the configured path (default: `/var/lib/reign/reign.db`).
 
+The connection sets `busy_timeout=5000` (concurrent writers wait instead of
+failing with `SQLITE_BUSY`), `journal_mode=WAL` (readers do not block on a
+writer) and `foreign_keys=1` (deleting a service cascades to its state and events).
+
+`status` is the runtime status. A disabled service that is not running reads
+`disabled`; one that is still running keeps `running` until it stops. The
+`enabled` column is the flag itself.
+
 ### Tables
 
 #### `services`

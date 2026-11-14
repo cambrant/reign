@@ -302,14 +302,19 @@ func SetServiceStarted(db *sql.DB, serviceID string, pid *int) error {
 	return err
 }
 
-// SetServiceStopped marks a service as stopped.
+// stoppedStatusSQL evaluates to the status of a service that is not running:
+// "disabled" for disabled services, "stopped" otherwise. It expects the
+// service ID as its only parameter.
+const stoppedStatusSQL = `CASE WHEN (SELECT enabled FROM services WHERE id = ?) = 0 THEN 'disabled' ELSE 'stopped' END`
+
+// SetServiceStopped marks a service as stopped ("disabled" if it is disabled).
 func SetServiceStopped(db *sql.DB, serviceID string) error {
 	query := `
 		UPDATE service_state
-		SET status = 'stopped', pid = NULL, stopped_at = datetime('now'), updated_at = datetime('now')
+		SET status = ` + stoppedStatusSQL + `, pid = NULL, stopped_at = datetime('now'), updated_at = datetime('now')
 		WHERE service_id = ?
 	`
-	_, err := db.Exec(query, serviceID)
+	_, err := db.Exec(query, serviceID, serviceID)
 	return err
 }
 
@@ -318,10 +323,10 @@ func SetServiceStopped(db *sql.DB, serviceID string) error {
 func SetServiceStoppedExternally(db *sql.DB, serviceID string, reason string) error {
 	query := `
 		UPDATE service_state
-		SET status = 'stopped', pid = NULL, stopped_at = datetime('now'), last_error = ?, updated_at = datetime('now')
+		SET status = ` + stoppedStatusSQL + `, pid = NULL, stopped_at = datetime('now'), last_error = ?, updated_at = datetime('now')
 		WHERE service_id = ?
 	`
-	_, err := db.Exec(query, reason, serviceID)
+	_, err := db.Exec(query, serviceID, reason, serviceID)
 	return err
 }
 

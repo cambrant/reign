@@ -19,8 +19,11 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
-	// Open database
-	db, err := sql.Open("sqlite", dbPath+"?_foreign_keys=on")
+	// Open database. busy_timeout makes concurrent writers (API handlers,
+	// background operations, health checks) wait for the lock instead of
+	// failing with SQLITE_BUSY; WAL lets readers proceed during a write.
+	// foreign_keys enables the ON DELETE CASCADE the schema relies on.
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -98,6 +101,16 @@ func createSchema(db *sql.DB) error {
 		if _, err := db.Exec(m); err != nil && !strings.Contains(err.Error(), "duplicate column") {
 			return fmt.Errorf("migration %q: %w", m, err)
 		}
+	}
+
+	// Disabled services that are not running read "disabled". Older versions
+	// left some as "stopped" (or "failed"), so reign ls showed both.
+	if _, err := db.Exec(`
+		UPDATE service_state SET status = 'disabled'
+		WHERE status IN ('stopped', 'failed')
+		  AND service_id IN (SELECT id FROM services WHERE enabled = 0)
+	`); err != nil {
+		return fmt.Errorf("normalize disabled status: %w", err)
 	}
 
 	return nil

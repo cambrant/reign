@@ -36,6 +36,14 @@ type Orchestrator struct {
 	// noticed. They are restarted once ExternalStopGrace has passed, unless
 	// they come back on their own or are started or stopped through reign.
 	externalStops map[string]time.Time
+
+	// serviceLocks serialize lifecycle operations per service, so concurrent
+	// restarts (or a restart racing the health check) cannot interleave.
+	locksMu      sync.Mutex
+	serviceLocks map[string]*sync.Mutex
+
+	// restartPause is the pause between stop and start in a restart.
+	restartPause time.Duration
 }
 
 const (
@@ -60,6 +68,8 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		stopChan:        make(chan struct{}),
 		pendingRestarts: make(map[string]bool),
 		externalStops:   make(map[string]time.Time),
+		serviceLocks:    make(map[string]*sync.Mutex),
+		restartPause:    time.Second,
 	}
 }
 
@@ -221,8 +231,8 @@ func (o *Orchestrator) SyncServiceStates(ctx context.Context) error {
 			continue
 		}
 
-		// Skip disabled services
-		if state != nil && state.Status == models.StatusDisabled {
+		// A disabled service that is not running stays "disabled"
+		if state != nil && state.Status == models.StatusDisabled && actualStatus != models.StatusRunning {
 			continue
 		}
 
@@ -259,6 +269,13 @@ func (o *Orchestrator) StartService(ctx context.Context, id string) error {
 // startService starts a service. Automatic restarts (auto=true) keep the restart
 // count, so MaxRestarts can take effect; manual starts reset it.
 func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) error {
+	unlock := o.lockService(id)
+	defer unlock()
+	return o.startServiceLocked(ctx, id, auto)
+}
+
+// startServiceLocked starts a service; the caller holds its lock.
+func (o *Orchestrator) startServiceLocked(ctx context.Context, id string, auto bool) error {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return fmt.Errorf("failed to get service: %w", err)
@@ -267,11 +284,7 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 		return fmt.Errorf("service not found: %s", id)
 	}
 
-	state, err := models.GetServiceState(o.db, id)
-	if err != nil {
-		return fmt.Errorf("failed to get service state: %w", err)
-	}
-	if state != nil && state.Status == models.StatusDisabled {
+	if !service.Enabled {
 		return fmt.Errorf("service is disabled: %s", id)
 	}
 
@@ -323,6 +336,13 @@ func (o *Orchestrator) startService(ctx context.Context, id string, auto bool) e
 
 // StopService stops a specific service.
 func (o *Orchestrator) StopService(ctx context.Context, id string) error {
+	unlock := o.lockService(id)
+	defer unlock()
+	return o.stopServiceLocked(ctx, id)
+}
+
+// stopServiceLocked stops a service; the caller holds its lock.
+func (o *Orchestrator) stopServiceLocked(ctx context.Context, id string) error {
 	service, err := models.GetServiceByID(o.db, id)
 	if err != nil {
 		return fmt.Errorf("failed to get service: %w", err)
@@ -389,7 +409,7 @@ func (o *Orchestrator) StartServiceAsync(ctx context.Context, id string) (*model
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service state: %w", err)
 	}
-	if state != nil && state.Status == models.StatusDisabled {
+	if !service.Enabled {
 		return nil, fmt.Errorf("service is disabled: %s", id)
 	}
 
@@ -412,6 +432,8 @@ func (o *Orchestrator) StartServiceAsync(ctx context.Context, id string) (*model
 	// Run the actual start in the background
 	go func() {
 		ctx := context.WithoutCancel(ctx)
+		unlock := o.lockService(id)
+		defer unlock()
 		exec := o.getExecutor(service.Type)
 		if exec == nil {
 			models.SetServiceFailed(o.db, id, "unknown service type")
@@ -475,6 +497,8 @@ func (o *Orchestrator) StopServiceAsync(ctx context.Context, id string) (*models
 	// Run the actual stop in the background
 	go func() {
 		ctx := context.WithoutCancel(ctx)
+		unlock := o.lockService(id)
+		defer unlock()
 		exec := o.getExecutor(service.Type)
 		if exec == nil {
 			logger.Error("Unknown service type for %s: %s", id, service.Type)
@@ -514,7 +538,7 @@ func (o *Orchestrator) RestartServiceAsync(ctx context.Context, id string, pull 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get service state: %w", err)
 	}
-	if state != nil && state.Status == models.StatusDisabled {
+	if !service.Enabled {
 		return nil, fmt.Errorf("service is disabled: %s", id)
 	}
 	if pull && service.Type != models.ServiceTypeCompose {
@@ -549,11 +573,15 @@ func (o *Orchestrator) RestartServiceAsync(ctx context.Context, id string, pull 
 				return
 			}
 		}
-		if err := o.StopService(ctx, id); err != nil {
+		// Hold the lock across stop and start, so a concurrent restart
+		// cannot run its stop between them and leave the service stopped.
+		unlock := o.lockService(id)
+		defer unlock()
+		if err := o.stopServiceLocked(ctx, id); err != nil {
 			logger.Warn("Error stopping service %s during restart: %v", id, err)
 		}
-		time.Sleep(1 * time.Second)
-		if err := o.StartService(ctx, id); err != nil {
+		time.Sleep(o.restartPause)
+		if err := o.startServiceLocked(ctx, id, false); err != nil {
 			logger.Error("Failed to start service %s during restart: %v", id, err)
 		}
 	}()
@@ -720,21 +748,35 @@ func (o *Orchestrator) runHealthChecks(ctx context.Context) {
 	}
 
 	for _, service := range services {
-		state, err := models.GetServiceState(o.db, service.ID)
-		if err != nil || state == nil {
-			continue
-		}
+		o.checkService(ctx, service)
+	}
+}
 
-		switch state.Status {
-		case models.StatusRunning:
-			o.checkRunningService(ctx, service, state)
-		case models.StatusStopped:
-			o.checkExternallyStopped(ctx, service, state)
-		case models.StatusFailed:
-			// A failed start (e.g. a transient docker error) is retried too,
-			// not only services that die while running.
-			o.maybeScheduleRestart(ctx, service, state)
-		}
+// checkService runs the health check of one service. A service with a
+// lifecycle operation in progress is skipped until the next round.
+func (o *Orchestrator) checkService(ctx context.Context, service models.Service) {
+	unlock, ok := o.tryLockService(service.ID)
+	if !ok {
+		logger.Debug("Skipping health check of %s: operation in progress", service.ID)
+		return
+	}
+	defer unlock()
+
+	// Read the state under the lock: an operation that just finished may have changed it.
+	state, err := models.GetServiceState(o.db, service.ID)
+	if err != nil || state == nil {
+		return
+	}
+
+	switch state.Status {
+	case models.StatusRunning:
+		o.checkRunningService(ctx, service, state)
+	case models.StatusStopped:
+		o.checkExternallyStopped(ctx, service, state)
+	case models.StatusFailed:
+		// A failed start (e.g. a transient docker error) is retried too,
+		// not only services that die while running.
+		o.maybeScheduleRestart(ctx, service, state)
 	}
 }
 
@@ -761,6 +803,15 @@ func (o *Orchestrator) checkRunningService(ctx context.Context, service models.S
 			}
 		}
 	case models.StatusStopped, models.StatusFailed:
+		if !service.Enabled {
+			// A disabled service that was still running has stopped: it is
+			// not restarted, and now reads "disabled".
+			if err := models.SetServiceStopped(o.db, service.ID); err != nil {
+				logger.Error("Failed to update status for %s: %v", service.ID, err)
+			}
+			o.logEvent(ctx, service.ID, "stopped", "Disabled service is no longer running")
+			return
+		}
 		logger.Warn("Service %s expected running but is %s", service.ID, actualStatus)
 		cause := o.stopCause(ctx, &service, state)
 		if cause.External {
@@ -867,6 +918,33 @@ func (o *Orchestrator) checkExternallyStopped(ctx context.Context, service model
 	}
 	o.logEvent(ctx, service.ID, "failed", msg)
 	o.maybeScheduleRestart(ctx, service, state)
+}
+
+// lockService takes the lifecycle lock of a service and returns its unlock.
+func (o *Orchestrator) lockService(id string) func() {
+	m := o.serviceLock(id)
+	m.Lock()
+	return m.Unlock
+}
+
+// tryLockService takes the lifecycle lock of a service if it is free.
+func (o *Orchestrator) tryLockService(id string) (func(), bool) {
+	m := o.serviceLock(id)
+	if !m.TryLock() {
+		return nil, false
+	}
+	return m.Unlock, true
+}
+
+func (o *Orchestrator) serviceLock(id string) *sync.Mutex {
+	o.locksMu.Lock()
+	defer o.locksMu.Unlock()
+	m, ok := o.serviceLocks[id]
+	if !ok {
+		m = &sync.Mutex{}
+		o.serviceLocks[id] = m
+	}
+	return m
 }
 
 // clearExternalStop forgets a service's external stop, e.g. when it is

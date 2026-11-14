@@ -323,9 +323,13 @@ func (h *ServicesHandler) updateService(w http.ResponseWriter, r *http.Request, 
 	}
 	if req.Enabled != nil {
 		service.Enabled = *req.Enabled
-		// Update state if disabling
+		// Update state if disabling. A service that is still running keeps its
+		// runtime status (shown with ENABLED=no); it reads "disabled" once stopped.
 		if !*req.Enabled {
-			models.UpdateServiceStatus(h.db, id, models.StatusDisabled)
+			state, _ := models.GetServiceState(h.db, id)
+			if state == nil || state.Status == models.StatusStopped || state.Status == models.StatusFailed {
+				models.UpdateServiceStatus(h.db, id, models.StatusDisabled)
+			}
 			models.LogEventBy(h.db, id, "disabled", "Service disabled", requesterFromRequest(r))
 		} else {
 			// If enabling, change status from disabled to stopped
