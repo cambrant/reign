@@ -342,8 +342,10 @@ func runUpdateCommand(args []string) error {
 func runDeleteCommand(args []string) error {
 	fs := flag.NewFlagSet("delete", flag.ExitOnError)
 	server := fs.String("server", "", "Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)")
-	force := fs.Bool("f", false, "Force deletion without confirmation")
-	forceL := fs.Bool("force", false, "Force deletion without confirmation (long form)")
+	yes := fs.Bool("y", false, "Delete without confirmation")
+	yesL := fs.Bool("yes", false, "Delete without confirmation (long form)")
+	force := fs.Bool("f", false, "Alias for --yes")
+	forceL := fs.Bool("force", false, "Alias for --yes (long form)")
 	fs.Parse(args)
 
 	if fs.NArg() < 1 {
@@ -359,7 +361,7 @@ func runDeleteCommand(args []string) error {
 	}
 
 	client := NewClient(addr)
-	cmd := NewDeleteCommand(client, fs.Arg(0), *force || *forceL)
+	cmd := NewDeleteCommand(client, fs.Arg(0), *yes || *yesL || *force || *forceL)
 	return cmd.Run()
 }
 
@@ -676,16 +678,20 @@ func printDeleteHelp() {
 
 Delete a service. If the service is running, it will be stopped first.
 
+Without --yes, reign asks for confirmation on the terminal. When stdin is
+not a terminal (scripts, pipes), --yes is required and the command fails
+otherwise.
+
 Aliases: rm, remove
 
 Options:
   --server        Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
-  -f, --force     Delete without confirmation prompt
+  -y, --yes       Delete without confirmation prompt (also -f, --force)
 
 Examples:
   reign delete myservice
-  reign delete -f myservice
-  reign rm myservice
+  reign delete -y myservice
+  reign rm --yes myservice
 `)
 }
 

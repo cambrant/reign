@@ -184,8 +184,11 @@ are changed.
 
 ```bash
 reign delete myservice        # prompts for confirmation
-reign delete -f myservice     # no confirmation
+reign delete -y myservice     # no confirmation (also -f/--force)
 ```
+
+Without a terminal on stdin (scripts, pipes) `--yes` is required; the command
+fails with an error instead of reading a confirmation from the pipe.
 
 ### Start / Stop / Restart
 

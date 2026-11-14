@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -523,16 +525,31 @@ func (c *UpdateCommand) buildRequest() (*ServiceRequest, error) {
 type DeleteCommand struct {
 	client    *Client
 	serviceID string
-	force     bool
+	yes       bool
+
+	// in and interactive describe stdin; they are fields so tests can fake a terminal.
+	in          io.Reader
+	interactive bool
 }
 
-// NewDeleteCommand creates a new delete command.
-func NewDeleteCommand(client *Client, serviceID string, force bool) *DeleteCommand {
+// NewDeleteCommand creates a new delete command. With yes set, no confirmation is asked.
+func NewDeleteCommand(client *Client, serviceID string, yes bool) *DeleteCommand {
 	return &DeleteCommand{
-		client:    client,
-		serviceID: serviceID,
-		force:     force,
+		client:      client,
+		serviceID:   serviceID,
+		yes:         yes,
+		in:          os.Stdin,
+		interactive: stdinIsTerminal(),
 	}
+}
+
+// stdinIsTerminal reports whether stdin is a character device (a TTY).
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 // Run executes the delete command.
@@ -541,13 +558,17 @@ func (c *DeleteCommand) Run() error {
 		return fmt.Errorf("service ID is required")
 	}
 
-	if !c.force {
+	if !c.yes {
+		// Never read a confirmation from a pipe: `echo y | reign delete` should
+		// be an explicit --yes instead, so scripts state their intent.
+		if !c.interactive {
+			return fmt.Errorf("refusing to delete service '%s' without confirmation: stdin is not a terminal (use --yes)", c.serviceID)
+		}
 		fmt.Printf("Are you sure you want to delete service '%s'? (y/N): ", c.serviceID)
-		var confirm string
-		fmt.Scanln(&confirm)
+		confirm, _ := bufio.NewReader(c.in).ReadString('\n')
+		confirm = strings.TrimSpace(confirm)
 		if !strings.EqualFold(confirm, "y") && !strings.EqualFold(confirm, "yes") {
-			fmt.Println("Aborted.")
-			return nil
+			return fmt.Errorf("aborted: service '%s' was not deleted", c.serviceID)
 		}
 	}
 
