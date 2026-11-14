@@ -102,6 +102,7 @@ Handles loading configuration from JSON files with sensible defaults.
 | `healthCheckInterval` | duration | `30s` | Interval between health checks |
 | `binaryRunner` | string | `auto` | `systemd`, `direct`, or `auto` |
 | `runtimeDir` | string | `/run/reign` | Directory for short-lived runtime files |
+| `dockerSocket` | string | `/var/run/docker.sock` | Docker API socket for status checks (empty: CLI only) |
 
 ### Logger (`internal/logger/`)
 
@@ -137,7 +138,10 @@ type Executor interface {
 - Never pulls as part of a start; `docker compose pull` only runs for
   `reign pull` and `reign restart --pull`
 - Runs `docker compose stop` to stop
-- Parses `docker compose ps --format json` for status
+- Status: the project's `docker compose config` (cached until a file in the
+  project directory changes) says which services should run; container state
+  comes from one `GET /containers/json` on the Docker socket shared by all
+  projects for 2s, falling back to `docker compose ps -a --format json`
 
 **Binary Executor** (mode set by `binaryRunner`):
 - `systemd` mode: `systemd-run --unit=reign-<id>.service --service-type=exec` with

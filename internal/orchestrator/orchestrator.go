@@ -50,7 +50,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 	return &Orchestrator{
 		db:              db,
 		config:          cfg,
-		composeExecutor: &executor.ComposeExecutor{},
+		composeExecutor: newComposeExecutor(cfg),
 		binaryExecutor: executor.NewBinaryExecutorWithOptions(executor.BinaryOptions{
 			Mode:        executor.ResolveBinaryMode(cfg.BinaryRunner),
 			EnvDir:      cfg.RuntimeDir,
@@ -61,6 +61,14 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		pendingRestarts: make(map[string]bool),
 		externalStops:   make(map[string]time.Time),
 	}
+}
+
+// newComposeExecutor uses the Docker API for status checks when a socket is configured.
+func newComposeExecutor(cfg *config.Config) *executor.ComposeExecutor {
+	if cfg.DockerSocket == "" {
+		return &executor.ComposeExecutor{}
+	}
+	return executor.NewComposeExecutorWithDocker(executor.NewDockerClient(cfg.DockerSocket))
 }
 
 // StartupServices starts all enabled services in the correct order.

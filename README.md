@@ -84,6 +84,7 @@ Configuration file (`config.json`):
 | `logLevel` | `info` | Log level: debug, info, warn, error |
 | `externalStopGrace` | `1h` | How long a service stopped outside reign stays down before reign restarts it; `0` never restarts it |
 | `binaryRunner` | `auto` | How binary services run: `systemd` (transient units), `direct` (child processes), `auto` (systemd if `systemd-run` exists) |
+| `dockerSocket` | `/var/run/docker.sock` | Docker API socket for status checks; empty uses only the docker CLI |
 | `runtimeDir` | `/run/reign` | Short-lived files, e.g. env files handed to transient units |
 
 ---

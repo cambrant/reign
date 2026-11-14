@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/reign/internal/logger"
 	"github.com/reign/internal/models"
 )
 
@@ -38,6 +39,24 @@ type ComposeExecutor struct {
 	// valid while the directory's files are unchanged.
 	cfgMu    sync.Mutex
 	cfgCache map[string]cachedConfig
+
+	// docker, when set, lists containers through the Docker API: one request
+	// answers for every project, and the result is shared for containerListTTL.
+	docker        *DockerClient
+	listMu        sync.Mutex
+	listAt        time.Time
+	listByProject map[string][]psEntry
+}
+
+// containerListTTL is how long one container listing is reused. It is long
+// enough for a health tick over all services to share a single API call, and
+// short enough for callers polling for a state change.
+const containerListTTL = 2 * time.Second
+
+// NewComposeExecutorWithDocker returns a ComposeExecutor that reads container
+// state from the Docker API, falling back to `docker compose ps` on API errors.
+func NewComposeExecutorWithDocker(docker *DockerClient) *ComposeExecutor {
+	return &ComposeExecutor{docker: docker}
 }
 
 // composeConfig is the part of `docker compose config --format json` reign uses.
@@ -86,6 +105,7 @@ func (e *ComposeExecutor) compose(ctx context.Context, dir string, args ...strin
 // (missing) is what `docker compose up` does by itself, so no flag is passed;
 // floating tags are never silently refreshed by a restart.
 func (e *ComposeExecutor) Start(ctx context.Context, service *models.Service) error {
+	defer e.invalidateContainers()
 	return e.compose(ctx, service.Path, upArgs(service.PullPolicy)...)
 }
 
@@ -101,6 +121,7 @@ func upArgs(policy models.PullPolicy) []string {
 
 // Stop stops a Docker Compose service.
 func (e *ComposeExecutor) Stop(ctx context.Context, service *models.Service) error {
+	defer e.invalidateContainers()
 	return e.compose(ctx, service.Path, "down")
 }
 
@@ -229,6 +250,14 @@ func (e *ComposeExecutor) Status(ctx context.Context, service *models.Service) (
 		return "", err
 	}
 
+	if e.docker != nil && cfg.Name != "" {
+		containers, err := e.projectContainers(ctx, cfg.Name)
+		if err == nil {
+			return evaluateStatus(cfg.Services, containers), nil
+		}
+		logger.Debug("Docker API listing failed, using docker compose ps: %v", err)
+	}
+
 	psOut, psErr, err := run(ctx, service.Path, "docker", "compose", "ps", "-a", "--format", "json")
 	if err != nil {
 		return "", fmt.Errorf("docker compose ps failed: %s: %w", bytes.TrimSpace(psErr), err)
@@ -239,6 +268,28 @@ func (e *ComposeExecutor) Status(ctx context.Context, service *models.Service) (
 	}
 
 	return evaluateStatus(cfg.Services, containers), nil
+}
+
+// projectContainers returns a project's containers from a shared, briefly
+// cached listing of all compose containers.
+func (e *ComposeExecutor) projectContainers(ctx context.Context, project string) ([]psEntry, error) {
+	e.listMu.Lock()
+	defer e.listMu.Unlock()
+	if e.listByProject == nil || time.Since(e.listAt) >= containerListTTL {
+		byProject, err := e.docker.ComposeContainers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		e.listByProject, e.listAt = byProject, time.Now()
+	}
+	return e.listByProject[project], nil
+}
+
+// invalidateContainers drops the cached listing after reign changed containers.
+func (e *ComposeExecutor) invalidateContainers() {
+	e.listMu.Lock()
+	e.listByProject = nil
+	e.listMu.Unlock()
 }
 
 // config returns the project's parsed compose config. `docker compose config`

@@ -33,6 +33,9 @@ type Config struct {
 	// transient unit, survives reign restarts), "direct" (child processes of
 	// reign), or "auto" (systemd when systemd-run is available).
 	BinaryRunner string `json:"binaryRunner"`
+	// DockerSocket is the Docker Engine API socket used for cheap status
+	// checks. Empty disables the API and uses the docker CLI only.
+	DockerSocket string `json:"dockerSocket"`
 	// RuntimeDir holds short-lived files such as env files for transient units.
 	RuntimeDir string `json:"runtimeDir"`
 }
@@ -57,6 +60,7 @@ func DefaultConfig() *Config {
 		ExternalStopGraceStr: "1h",
 		BinaryRunner:         "auto",
 		RuntimeDir:           "/run/reign",
+		DockerSocket:         "/var/run/docker.sock",
 	}
 }
 
