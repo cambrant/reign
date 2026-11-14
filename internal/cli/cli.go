@@ -23,6 +23,12 @@ func Run(args []string) (bool, error) {
 	// Check if the first argument is a CLI command
 	cmd := args[1]
 
+	// --help/-h print the command overview, not the server flag usage.
+	if isHelpFlag(cmd) {
+		printGeneralHelp()
+		return true, nil
+	}
+
 	// Skip if it looks like server flags
 	if strings.HasPrefix(cmd, "-") {
 		return false, nil
@@ -76,6 +82,15 @@ func Run(args []string) (bool, error) {
 		os.Exit(1)
 		return true, nil
 	}
+}
+
+// isHelpFlag reports whether arg asks for help (-h, -help, --help).
+func isHelpFlag(arg string) bool {
+	switch arg {
+	case "-h", "-help", "--help":
+		return true
+	}
+	return false
 }
 
 func getServerAddr(fs *flag.FlagSet) string {
@@ -513,6 +528,11 @@ Commands:
 
 Global Options:
   --server        Reign server address (default: $REIGN_SERVER or http://127.0.0.1:7890)
+  -h, --help      Show this help
+
+Server Options (reign serve):
+  -c, -config     Path to configuration file
+  -v, -version    Show version information
 
 Environment Variables:
   REIGN_SERVER    Default server address
