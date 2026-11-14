@@ -44,6 +44,10 @@ type Orchestrator struct {
 
 	// restartPause is the pause between stop and start in a restart.
 	restartPause time.Duration
+
+	// observed caches the last status each executor reported (see probeStatus).
+	obsMu    sync.Mutex
+	observed map[string]Observation
 }
 
 const (
@@ -70,6 +74,7 @@ func New(db *sql.DB, cfg *config.Config) *Orchestrator {
 		externalStops:   make(map[string]time.Time),
 		serviceLocks:    make(map[string]*sync.Mutex),
 		restartPause:    time.Second,
+		observed:        make(map[string]Observation),
 	}
 }
 
@@ -218,7 +223,7 @@ func (o *Orchestrator) SyncServiceStates(ctx context.Context) error {
 		}
 
 		// Probe actual status from executor
-		actualStatus, err := exec.Status(ctx, &service)
+		actualStatus, err := o.probeStatus(ctx, &service)
 		if err != nil {
 			logger.Warn("Failed to get status for %s: %v", service.ID, err)
 			continue
@@ -615,24 +620,6 @@ func (o *Orchestrator) pullImages(ctx context.Context, service *models.Service) 
 	return nil
 }
 
-// GetServiceStatus returns the current status of a service by querying the executor.
-func (o *Orchestrator) GetServiceStatus(ctx context.Context, id string) (models.ServiceStatus, error) {
-	service, err := models.GetServiceByID(o.db, id)
-	if err != nil {
-		return "", fmt.Errorf("failed to get service: %w", err)
-	}
-	if service == nil {
-		return "", fmt.Errorf("service not found: %s", id)
-	}
-
-	exec := o.getExecutor(service.Type)
-	if exec == nil {
-		return "", fmt.Errorf("unknown service type: %s", service.Type)
-	}
-
-	return exec.Status(ctx, service)
-}
-
 // GetServiceStats returns statistics for a service.
 func (o *Orchestrator) GetServiceStats(ctx context.Context, id string) (*ServiceStats, error) {
 	service, err := models.GetServiceByID(o.db, id)
@@ -833,7 +820,7 @@ func (o *Orchestrator) checkRunningService(ctx context.Context, service models.S
 		return
 	}
 
-	actualStatus, err := exec.Status(ctx, &service)
+	actualStatus, err := o.probeStatus(ctx, &service)
 	if err != nil {
 		// Unknown state (e.g. docker daemon restarting): don't act on it.
 		logger.Debug("Failed to get status for %s: %v", service.ID, err)
@@ -934,7 +921,7 @@ func (o *Orchestrator) checkExternallyStopped(ctx context.Context, service model
 	if exec == nil {
 		return
 	}
-	actual, err := exec.Status(ctx, &service)
+	actual, err := o.probeStatus(ctx, &service)
 	if err != nil {
 		logger.Debug("Failed to get status for %s: %v", service.ID, err)
 		return
@@ -1098,7 +1085,7 @@ func (o *Orchestrator) waitForHealthy(ctx context.Context, service *models.Servi
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			status, err := exec.Status(ctx, service)
+			status, err := o.probeStatus(ctx, service)
 			if err != nil {
 				logger.Debug("Error checking status of %s: %v", service.ID, err)
 				continue

@@ -274,7 +274,23 @@ Returns orchestrator status and summary.
 GET /services
 ```
 
-Returns all registered services with their current state.
+Returns all registered services with their current state. Once the health
+loop has checked a service, it also carries `observed`: the status last
+reported by docker or systemd and when (`{"status":"running","checked_at":"..."}`).
+`state.status` is what reign intends; `observed.status` is what it last saw.
+Monitoring (e.g. a Zabbix HTTP agent item) can read this one endpoint, or
+`reign ls --json`, instead of running compose commands per project.
+
+### Service Status
+
+```bash
+GET /services/{id}/status
+GET /services/{id}/status?fresh=1
+```
+
+Returns the observed status from the last health check without touching
+docker or systemd. With `fresh=1` (or when no check has run yet), the executor
+is asked live and the cache is updated.
 
 ### Get Service
 

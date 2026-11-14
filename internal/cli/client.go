@@ -119,6 +119,13 @@ type ServiceWithState struct {
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
 	State          ServiceState `json:"state"`
+	Observed       *Observation `json:"observed,omitempty"`
+}
+
+// Observation is the status reign last observed from docker or systemd.
+type Observation struct {
+	Status    string    `json:"status"`
+	CheckedAt time.Time `json:"checked_at"`
 }
 
 // ServiceState represents the runtime state of a service.

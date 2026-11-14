@@ -159,6 +159,10 @@ func (c *ShowCommand) Run() error {
 	// State information
 	fmt.Printf("State:\n")
 	fmt.Printf("  Status:         %s\n", resp.State.Status)
+	if resp.Observed != nil {
+		fmt.Printf("  Observed:       %s (checked %s ago)\n", resp.Observed.Status,
+			time.Since(resp.Observed.CheckedAt).Round(time.Second))
+	}
 	if resp.State.PID != nil {
 		fmt.Printf("  PID:            %d\n", *resp.State.PID)
 	}

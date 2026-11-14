@@ -42,10 +42,26 @@ type ServiceRequest struct {
 	Infrastructure *bool  `json:"infrastructure,omitempty"`
 }
 
+// ServiceView is a service with its intended state and, once a health check
+// has run, the status last observed from docker or systemd and when.
+type ServiceView struct {
+	models.ServiceWithState
+	Observed *orchestrator.Observation `json:"observed,omitempty"`
+}
+
 // ServiceListResponse represents the response for listing services.
 type ServiceListResponse struct {
-	Services []models.ServiceWithState `json:"services"`
-	Total    int                       `json:"total"`
+	Services []ServiceView `json:"services"`
+	Total    int           `json:"total"`
+}
+
+// view adds the observed status to a service.
+func (h *ServicesHandler) view(s models.ServiceWithState) ServiceView {
+	v := ServiceView{ServiceWithState: s}
+	if obs, ok := h.orchestrator.Observed(s.ID); ok {
+		v.Observed = &obs
+	}
+	return v
 }
 
 // ServeHTTP routes requests to the appropriate handler.
@@ -118,6 +134,12 @@ func (h *ServicesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.getServiceLogs(w, r, serviceID)
+	case "status":
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.getServiceStatus(w, r, serviceID)
 	case "stats":
 		if r.Method != http.MethodGet {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -143,13 +165,14 @@ func (h *ServicesHandler) listServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if services == nil {
-		services = []models.ServiceWithState{}
+	views := make([]ServiceView, 0, len(services))
+	for _, s := range services {
+		views = append(views, h.view(s))
 	}
 
 	resp := ServiceListResponse{
-		Services: services,
-		Total:    len(services),
+		Services: views,
+		Total:    len(views),
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -174,13 +197,13 @@ func (h *ServicesHandler) getService(w http.ResponseWriter, r *http.Request, id 
 	}
 
 	type ServiceDetailResponse struct {
-		models.ServiceWithState
+		ServiceView
 		Events []models.ServiceEvent `json:"events"`
 	}
 
 	resp := ServiceDetailResponse{
-		ServiceWithState: *service,
-		Events:           events,
+		ServiceView: h.view(*service),
+		Events:      events,
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -525,6 +548,22 @@ func (h *ServicesHandler) streamServiceLogs(w http.ResponseWriter, r *http.Reque
 type EventLogResponse struct {
 	Events []models.EventLogEntry `json:"events"`
 	Total  int                    `json:"total"`
+}
+
+// getServiceStatus handles GET /services/{id}/status[?fresh=1]. It answers
+// from the health loop's last check unless fresh is requested.
+func (h *ServicesHandler) getServiceStatus(w http.ResponseWriter, r *http.Request, id string) {
+	fresh := r.URL.Query().Get("fresh") == "1" || r.URL.Query().Get("fresh") == "true"
+	obs, err := h.orchestrator.GetServiceStatus(r.Context(), id, fresh)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, obs)
 }
 
 // getServiceStats handles GET /services/{id}/stats.
