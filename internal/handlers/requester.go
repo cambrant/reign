@@ -9,7 +9,6 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
-	"unicode"
 )
 
 // RequesterHeader carries the CLI's self-reported identity, e.g. "tim@kraut pts/0 ppid=4242".
@@ -40,20 +39,31 @@ func requesterFromRequest(r *http.Request) string {
 	return fmt.Sprintf("%s [%s]", claimed, strings.Join(verified, " "))
 }
 
-// sanitizeRequester strips control characters and caps the length of a
-// client-supplied requester string.
+// sanitizeRequester reduces a client-supplied requester string to an
+// allowlist of printable ASCII and caps its length. Brackets are not allowed,
+// so a client cannot fake the server-verified "[uid=... addr]" suffix, and
+// control, bidi and other non-printing characters cannot reach the log.
 func sanitizeRequester(s string) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
+		if allowedRequesterRune(r) {
+			return r
 		}
-		return r
+		return -1
 	}, s)
 	s = strings.TrimSpace(s)
 	if len(s) > maxRequesterLen {
-		s = s[:maxRequesterLen]
+		s = s[:maxRequesterLen] // ASCII only, so this cuts on a character boundary
 	}
 	return s
+}
+
+// allowedRequesterRune reports whether r may appear in a self-reported requester.
+func allowedRequesterRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return strings.ContainsRune("@._:/ =()+-", r)
 }
 
 // uidName renders a UID as "1000(tim)", or just the number if it has no user.

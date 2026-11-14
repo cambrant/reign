@@ -69,7 +69,9 @@ func TestRequesterFromRequest(t *testing.T) {
 	}{
 		{"cli header", "tim@kraut pts/0 ppid=42", []string{"tim@kraut pts/0 ppid=42", "192.0.2.1:1234"}, nil},
 		{"no header", "", []string{"unknown client", "192.0.2.1:1234"}, nil},
-		{"control characters stripped", "evil\nINJECTED\x1b[31m", []string{"evilINJECTED[31m"}, []string{"\n", "\x1b"}},
+		{"control characters stripped", "evil\nINJECTED\x1b[31m", []string{"evilINJECTED31m"}, []string{"\n", "\x1b"}},
+		{"forged verified suffix", "tim [uid=0(root) 127.0.0.1:1]", []string{"tim uid=0(root) 127.0.0.1:1 [192.0.2.1:1234]"}, []string{"tim ["}},
+		{"bidi override stripped", "tim\u202eroot", []string{"timroot"}, []string{"\u202e"}},
 		{"long header truncated", strings.Repeat("a", 500), []string{strings.Repeat("a", maxRequesterLen) + " ["}, []string{strings.Repeat("a", maxRequesterLen+1)}},
 	}
 	for _, tt := range tests {
